@@ -41,9 +41,34 @@ When the source cannot be fixed by container surgery (very sparse keyframes, non
 - Concurrency across files.
 - Hardware encoders for the re-encode path.
 
+## Usage
+
+CLI:
+
+```
+mp4norm probe <file>                 # diagnose the container layout
+mp4norm normalize <input>            # faststart + interleave (lossless)
+mp4norm normalize -format fmp4 <in>  # fragmented MP4 with sidx (lossless)
+mp4norm faststart <input>            # only move moov to the front
+mp4norm reencode -crf 23 <input>     # optional re-encode (fix sparse keyframes / VFR)
+```
+
+Common flags: `-o <out>` output path, `-window <ms>` interleave window,
+`-frag-ms <ms>` fragment duration, `-vcodec h264|h265|copy`, `-hw auto|on|off`,
+`-gop <sec>` keyframe interval.
+
+Desktop GUI (Wails):
+
+```
+cd gui && wails build     # produces build/bin/mp4norm
+```
+
 ## Status
 
-Early development — scaffolding.
+Working: probe, lossless faststart, interleaving, fMP4 + sidx output, and the
+optional ffmpeg re-encode path (with hardware encoder detection). A Wails
+desktop UI wraps all of it. Remaining: bundling an ffmpeg build for distribution
+and CI packaging for the three platforms.
 
 ## License
 
