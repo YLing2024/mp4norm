@@ -1,0 +1,35 @@
+# Binaries / build output
+/bin/
+/build/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+mp4norm
+mp4norm.exe
+
+# Go
+*.test
+*.out
+vendor/
+
+# Node / frontend (Wails)
+node_modules/
+gui/frontend/dist/
+gui/frontend/wailsjs/
+gui/build/bin/
+
+# Bundled ffmpeg (downloaded at build/package time)
+third_party/ffmpeg/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.log
