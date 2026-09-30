@@ -38,15 +38,15 @@ type Finding struct {
 
 // Report is the result of analysing one file.
 type Report struct {
-	Path          string
-	FileSize      int64
-	Boxes         []isobmff.Box
-	MajorBrand    string
-	Compatible    []string
-	Fragmented    bool
-	MoovPosition  MoovPosition
-	MdatCount     int
-	Findings      []Finding
+	Path         string
+	FileSize     int64
+	Boxes        []isobmff.Box
+	MajorBrand   string
+	Compatible   []string
+	Fragmented   bool
+	MoovPosition MoovPosition
+	MdatCount    int
+	Findings     []Finding
 }
 
 // Analyze opens and inspects the file at path.
