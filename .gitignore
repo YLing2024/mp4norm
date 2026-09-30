@@ -6,8 +6,8 @@
 *.dll
 *.so
 *.dylib
-mp4norm
-mp4norm.exe
+/mp4norm
+/mp4norm.exe
 
 # Go
 *.test
