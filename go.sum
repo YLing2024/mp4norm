@@ -1,0 +1,4 @@
+github.com/Eyevinn/mp4ff v0.57.0 h1:/Gr4a5W83BcXyoFZSWSGGGjb5Yq1oYZGtHCnZ0i5hEg=
+github.com/Eyevinn/mp4ff v0.57.0/go.mod h1:3EZTsioPJ4xTLZEBBkVWoyd7UHnGp4vzwoEJ7lmr3CQ=
+github.com/go-test/deep v1.1.0 h1:WOcxcdHcvdgThNXjw0t76K42FXTU7HpNQWHpA2HHNlg=
+github.com/go-test/deep v1.1.0/go.mod h1:5C2ZWiW0ErCdrYzpqxLbTX7MG14M9iiw8DgHncVwcsE=
