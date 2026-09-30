@@ -75,7 +75,9 @@ func runFaststart(args []string) error {
 func runNormalize(args []string) error {
 	fs := flag.NewFlagSet("normalize", flag.ContinueOnError)
 	out := fs.String("o", "", "output file (default: <input>.norm.mp4)")
-	window := fs.Int("window", 1000, "interleave window in milliseconds")
+	format := fs.String("format", "progressive", "output format: progressive or fmp4")
+	window := fs.Int("window", 1000, "interleave window in milliseconds (progressive)")
+	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -83,9 +85,20 @@ func runNormalize(args []string) error {
 		return fmt.Errorf("normalize: missing <input>")
 	}
 	in := fs.Arg(0)
-	return transform(in, outputPath(*out, in), func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
-		return normalize.Interleave(src, dst, normalize.InterleaveOptions{WindowMs: *window})
-	})
+	outPath := outputPath(*out, in)
+
+	switch strings.ToLower(*format) {
+	case "progressive", "mp4", "prog":
+		return transform(in, outPath, func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
+			return normalize.Interleave(src, dst, normalize.InterleaveOptions{WindowMs: *window})
+		})
+	case "fmp4", "fragmented":
+		return transform(in, outPath, func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
+			return normalize.Fragment(src, dst, normalize.FragmentOptions{FragmentMs: *fragMs})
+		})
+	default:
+		return fmt.Errorf("normalize: unknown -format %q (want progressive or fmp4)", *format)
+	}
 }
 
 // transform runs a normalizer function against in, writing to outPath
@@ -147,8 +160,9 @@ Usage:
 
 Commands:
   probe <file>                       Inspect an MP4's container layout and report problems
-  normalize [-window ms] [-o out] <input>
-                                     Move moov to the front and interleave audio/video (lossless)
+  normalize [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-o out] <input>
+                                     Move moov to the front and interleave (progressive),
+                                     or write a fragmented MP4 with sidx (fmp4). Lossless.
   faststart [-o out] <input>         Only move moov to the front (lossless, no re-encode)
   version                            Print the version
   help                               Show this help
