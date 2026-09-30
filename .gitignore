@@ -16,8 +16,11 @@ vendor/
 
 # Node / frontend (Wails)
 node_modules/
-gui/frontend/dist/
+# Wails frontend build output; keep the placeholder so go:embed resolves pre-build.
+gui/frontend/dist/*
+!gui/frontend/dist/.gitkeep
 gui/frontend/wailsjs/
+gui/frontend/package.json.md5
 gui/build/bin/
 
 # Bundled ffmpeg (downloaded at build/package time)
