@@ -39,6 +39,8 @@ func run(args []string) error {
 		return runProbe(args[1])
 	case "faststart":
 		return runFaststart(args[1:])
+	case "normalize":
+		return runNormalize(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil
@@ -67,12 +69,28 @@ func runFaststart(args []string) error {
 		return fmt.Errorf("faststart: missing <input>")
 	}
 	in := fs.Arg(0)
+	return transform(in, outputPath(*out, in), normalize.Faststart)
+}
 
-	outPath := *out
-	if outPath == "" {
-		outPath = defaultOutput(in, ".norm.mp4")
+func runNormalize(args []string) error {
+	fs := flag.NewFlagSet("normalize", flag.ContinueOnError)
+	out := fs.String("o", "", "output file (default: <input>.norm.mp4)")
+	window := fs.Int("window", 1000, "interleave window in milliseconds")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
+	if fs.NArg() < 1 {
+		return fmt.Errorf("normalize: missing <input>")
+	}
+	in := fs.Arg(0)
+	return transform(in, outputPath(*out, in), func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
+		return normalize.Interleave(src, dst, normalize.InterleaveOptions{WindowMs: *window})
+	})
+}
 
+// transform runs a normalizer function against in, writing to outPath
+// atomically via a temp file, then re-probes the result.
+func transform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)) error {
 	inFile, err := os.Open(in)
 	if err != nil {
 		return err
@@ -86,7 +104,7 @@ func runFaststart(args []string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
 
-	res, err := normalize.Faststart(inFile, tmp)
+	res, err := fn(inFile, tmp)
 	if err != nil {
 		tmp.Close()
 		return err
@@ -111,13 +129,12 @@ func runFaststart(args []string) error {
 	return nil
 }
 
-func defaultOutput(in, suffix string) string {
-	ext := filepath.Ext(in)
-	base := strings.TrimSuffix(in, ext)
-	if ext == "" {
-		ext = ".mp4"
+func outputPath(out, in string) string {
+	if out != "" {
+		return out
 	}
-	return base + suffix
+	base := strings.TrimSuffix(in, filepath.Ext(in))
+	return base + ".norm.mp4"
 }
 
 func mib(n int64) float64 { return float64(n) / (1 << 20) }
@@ -129,10 +146,12 @@ Usage:
   mp4norm <command> [arguments]
 
 Commands:
-  probe <file>                     Inspect an MP4's container layout and report problems
-  faststart [-o out] <input>       Move moov to the front (lossless, no re-encode)
-  version                          Print the version
-  help                             Show this help
+  probe <file>                       Inspect an MP4's container layout and report problems
+  normalize [-window ms] [-o out] <input>
+                                     Move moov to the front and interleave audio/video (lossless)
+  faststart [-o out] <input>         Only move moov to the front (lossless, no re-encode)
+  version                            Print the version
+  help                               Show this help
 
 `)
 }
