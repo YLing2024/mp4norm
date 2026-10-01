@@ -970,9 +970,14 @@ Commands:
   tmp <directory...>                 List leftover temp files from an interrupted run
   watch [-interval 5m] [-outdir dir] [-in-place] [-backup-dir dir] [-once] [-quiet] <dir...>
                                      Poll folders and normalize new files once they stop
-                                     being written. -in-place (with a backup) and -outdir
-                                     are mutually exclusive; -once runs one round and exits
-                                     with scan-style codes (0/1/2).
+                                     being written. The first round is a baseline
+                                     observation pass: files are recorded and left alone,
+                                     and processing starts from the second round on.
+                                     A file that is still changing is reported as writing,
+                                     never as failed. -in-place (with a backup) and -outdir
+                                     are mutually exclusive; -once runs a single observation
+                                     round and exits with scan-style codes (0/1/2) - run it
+                                     twice to observe, then process.
   reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
                                      Optional re-encode to fix sparse keyframes / VFR
   version                            Print the version

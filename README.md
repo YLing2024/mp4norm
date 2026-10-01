@@ -104,6 +104,14 @@ mp4norm scan <目录> -v             # 附带原始字段（brand / moov 位置 
 mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
 ```
 
+`watch` 轮询目录，等文件**停止写入后**再规整：
+
+```
+mp4norm watch [-interval 5m] [-outdir dir] [-in-place] [-backup-dir dir] [-once] [-quiet] <目录...>
+```
+
+**第一轮只做基线观察**：记录每个候选文件（`.mp4`/`.m4v`/`.mov`）的大小与修改时间后跳过，正在下载 / 录制中的文件不会被误判为已完成；从第二轮起才开始分类与处理。仍在变化的文件会记为 `writing`，**绝不会记为失败**——只有真正稳定、确实损坏的文件才会记失败。`-once` 只跑一轮观察即退出（沿用 scan 的退出码 `0`/`1`/`2`），需要运行两次才能「先观察、再处理」。
+
 桌面 GUI（Wails）—— **批量检测与批量规整是主要入口**：
 
 ```

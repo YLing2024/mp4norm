@@ -36,7 +36,7 @@ func runWatch(args []string) error {
 	outdir := fs.String("outdir", "", "output directory (default: <input>.norm.mp4 beside each file)")
 	inPlace := fs.Bool("in-place", false, "replace the input file after backing it up")
 	backupDir := fs.String("backup-dir", "", "directory for in-place backups (default: <input dir>/.mp4norm-backup)")
-	once := fs.Bool("once", false, "run a single round and exit")
+	once := fs.Bool("once", false, "run a single observation round and exit (run twice to observe, then process)")
 	quiet := fs.Bool("quiet", false, "only report files processed or errors")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err

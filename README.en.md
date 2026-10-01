@@ -106,9 +106,24 @@ Exit codes: `0` nothing to do / `1` some files need work / `2` some files are br
 
 `batch` normalizes many files or directories in parallel:
 
-```
+``` 
 mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
 ```
+
+`watch` polls folders and normalizes new files once they have stopped being written:
+
+```
+mp4norm watch [-interval 5m] [-outdir dir] [-in-place] [-backup-dir dir] [-once] [-quiet] <dir...>
+```
+
+The **first round is a baseline observation pass**: every candidate file
+(`.mp4`/`.m4v`/`.mov`) is recorded with its size and modification time and left
+alone, so a download or recording that is still in progress is never mistaken
+for a finished file. Classification and processing start from the second round.
+A file that is still changing is reported as `writing` and is never recorded as
+failed — only a file that has settled and is genuinely broken is. `-once` runs a
+single observation round and exits with scan-style codes (`0`/`1`/`2`); run it
+twice to observe, then process.
 
 Desktop GUI (Wails) — **batch detection and normalization are the main entry point**:
 
