@@ -45,6 +45,16 @@ func Locate() (string, error) {
 		}
 	}
 
+	// Support a bundled binary in the working directory (portable/dev layout).
+	if wd, err := os.Getwd(); err == nil {
+		for _, rel := range []string{"ffmpeg", filepath.Join("ffmpeg", "bin"), "third_party/ffmpeg", filepath.Join("third_party", "ffmpeg", "bin")} {
+			cand := filepath.Join(wd, rel, exeName("ffmpeg"))
+			if isExecutable(cand) {
+				return cand, nil
+			}
+		}
+	}
+
 	if p, err := exec.LookPath(exeName("ffmpeg")); err == nil {
 		return p, nil
 	}
