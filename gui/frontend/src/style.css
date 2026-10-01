@@ -30,13 +30,6 @@ header {
 }
 header h1 { margin: 0; font-size: 22px; }
 
-.tagline {
-  margin: 0 0 16px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.4;
-}
-
 .lang-switch {
   margin-left: auto;
   align-self: center;
@@ -97,7 +90,7 @@ label {
 }
 
 /* A labelled field with a plain-language hint underneath. */
-.field { flex: 1 1 230px; min-width: 0; }
+.field { position: relative; flex: 1 1 230px; min-width: 0; }
 .field input[readonly] { flex: none; width: 100%; min-width: 0; }
 
 /* Grey hint line shown under every field (never a title attribute, so it is
@@ -111,6 +104,60 @@ label {
   line-height: 1.4;
   white-space: normal;
 }
+
+/* ⓘ toggle: a one-line hint stays visible; the full explanation lives in the
+   popover and only appears on hover, focus or click. */
+details.info {
+  display: inline-block;
+  vertical-align: baseline;
+  margin-left: 2px;
+}
+details.info > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+details.info > summary::-webkit-details-marker { display: none; }
+details.info > summary:hover,
+details.info[open] > summary { color: var(--accent); }
+details.info .info-pop {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 20;
+  width: max-content;
+  max-width: 300px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  background: #2c3a50;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+details.info:hover .info-pop,
+details.info[open] .info-pop { display: block; }
+
+/* Sections nested inside the collapsible single-file card. */
+.subpane {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.subpane h3 { margin: 0 0 8px; font-size: 13px; }
+details.subdetails {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+details.subdetails > summary { cursor: pointer; user-select: none; }
+details.subdetails > summary > h3 { margin: 0 0 8px; font-size: 13px; }
 
 /* Advanced options inside an otherwise simple card. */
 details.advanced {
@@ -192,8 +239,6 @@ progress {
   font-size: 13px;
 }
 
-.spacer { flex: 1 1 auto; }
-
 .field.inline { flex: 0 0 auto; }
 .field.inline select { width: auto; }
 
@@ -202,7 +247,11 @@ progress {
 .field.checkbox > span:first-child { display: none; }
 .field.checkbox input { width: auto; }
 
+/* One toolbar row: filter controls and the file count stay on the left, while
+   margin-left:auto pushes the primary action to the right end. */
 .batch-toolbar { align-items: end; }
+.batch-count { align-self: center; }
+.batch-toolbar #batch-normalize { margin-left: auto; min-width: 220px; padding: 9px 22px; font-weight: 600; }
 
 .batch-table {
   width: 100%;
@@ -246,6 +295,9 @@ progress {
   white-space: nowrap;
 }
 .col-size { white-space: nowrap; }
+/* Numeric column: right-align header and cells so sizes line up for comparison. */
+.batch-table th.col-size,
+.batch-table td.col-size { text-align: right; }
 .col-verdict, .col-reason, .col-state { white-space: normal; }
 .col-state { color: var(--muted); }
 
@@ -258,10 +310,14 @@ progress {
 
 .batch-progress-text { margin-top: 4px; font-size: 12px; }
 
-.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.retry-btn {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  vertical-align: baseline;
+}
 
-/* Highlight the batch card while a file is dragged over it. */
-.batch-card.wails-drop-target-active { border-color: var(--accent); }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
 /* ---- Output mode + in-place warning ---- */
 
@@ -277,16 +333,30 @@ fieldset.output-mode legend {
   font-size: 12px;
   padding: 0 4px;
 }
+/* Radio row on top; the field the choice controls sits indented underneath so
+   the two read as one setting inside a single border. */
+fieldset.output-mode .mode-radios {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+}
 fieldset.output-mode .radio {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
   gap: 6px;
-  margin-right: 16px;
   color: var(--fg);
   font-size: 13px;
 }
 fieldset.output-mode .radio input { width: auto; }
+fieldset.output-mode .mode-fields {
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+fieldset.output-mode .mode-fields > .row:last-child { margin-bottom: 0; }
+fieldset.output-mode .mode-fields > .warning-banner { margin-bottom: 0; }
 
 .warning-banner {
   background: rgba(251, 191, 36, 0.14);

@@ -95,11 +95,6 @@ func (a *App) InitialTargets() []string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	// Native file drag & drop: forward the dropped paths to the frontend, which
-	// runs the same scan path as the "choose" buttons.
-	runtime.OnFileDrop(ctx, func(_, _ int, paths []string) {
-		runtime.EventsEmit(ctx, "files:dropped", paths)
-	})
 }
 
 // SetLanguage selects the language used for native dialogs. It accepts "zh"

@@ -19,7 +19,7 @@ import {
   RestoreBackup,
   DeleteBackups,
 } from '../wailsjs/go/main/App';
-import { EventsOn } from '../wailsjs/runtime/runtime';
+import { EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime';
 import { t, getLang, setLang, findingMessage } from './i18n';
 
 // state is the single source of truth for every user-editable field so the whole
@@ -42,6 +42,7 @@ const state = {
   // Collapsible sections. Kept in memory only (no persistence): every launch
   // starts collapsed, but a re-render (e.g. language switch) must not re-close
   // a section the user just opened.
+  singleOpen: false,
   normAdvanced: false,
   reencodeOpen: false,
   ffmpeg: { status: 'checking', version: '' },
@@ -60,10 +61,7 @@ const state = {
   outputMode: 'new',
   backupDir: '',
   fileStatus: {}, // path -> { state, error, pct, gain }
-  batch: {
-    running: false, done: 0, skipped: 0, failed: 0, total: 0,
-    finished: false, cancelled: false, beforeFirstPlay: 0, afterFirstPlay: 0,
-  },
+  batch: emptyBatch(),
 
   // Backup management.
   backupOpen: false,
@@ -72,11 +70,31 @@ const state = {
   backupConfirm: -1, // index into state.backups pending delete confirmation
 };
 
+// emptyBatch returns a fresh batch-progress record. Every reset (clear, scan,
+// run start) shares this shape so the running-file fields can never go stale.
+function emptyBatch() {
+  return {
+    running: false, done: 0, skipped: 0, failed: 0, total: 0,
+    finished: false, cancelled: false, beforeFirstPlay: 0, afterFirstPlay: 0,
+    currentIndex: 0, currentName: '',
+  };
+}
+
 const $ = (id) => document.getElementById(id);
+
+// basename keeps only the file name for compact progress / log lines.
+const basename = (p) => String(p).split(/[\\/]/).pop();
 
 const escapeHtml = (s) =>
   String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const escapeAttr = (s) => escapeHtml(s).replace(/"/g, '&quot;');
+
+// info renders the ⓘ toggle shown next to a parameter label. The full
+// explanation lives in the popover and only appears on hover, keyboard focus
+// or click — the always-visible hint stays one short line.
+const info = (key) =>
+  `<details class="info"><summary aria-label="${escapeAttr(t('info.aria'))}">ⓘ</summary>` +
+  `<span class="info-pop" role="tooltip">${escapeHtml(t(key))}</span></details>`;
 
 // humanBytes mirrors internal/probe.humanBytes so sizes show at the right
 // magnitude (B/KiB/MiB) instead of a rounded "0.0 MiB".
@@ -143,24 +161,78 @@ const inplace = () => state.outputMode === 'inplace';
 // backupDirDisplay names the in-place backup destination for the warning banner.
 const backupDirDisplay = () => state.backupDir || t('batch.inplace.defaultDir');
 
-// outputModeRadios is the shared new-file / replace-in-place picker. It appears
-// in both the batch card and the single-file card but edits one shared state.
-const outputModeRadios = (name) => `
-  <fieldset class="field output-mode">
-    <legend>${t('batch.mode.label')}</legend>
-    <label class="radio"><input type="radio" name="${name}" value="new"${
-      inplace() ? '' : ' checked'
-    } /> ${t('batch.mode.new')}</label>
-    <label class="radio"><input type="radio" name="${name}" value="inplace"${
-      inplace() ? ' checked' : ''
-    } /> ${t('batch.mode.inplace')}</label>
-    <span class="hint">${escapeHtml(t('batch.mode.hint'))}</span>
-  </fieldset>`;
+// backupDirRow is the backup-folder picker shown inside the in-place mode of
+// the output-mode group. The element ids are parameterised because both the
+// batch and single-file cards render their own copy bound to the shared state.
+const backupDirRow = (inputId, buttonId) => `
+  <div class="row">
+    <label class="field">
+      <span>${t('batch.inplace.backupdir')}</span>
+      <input id="${inputId}" type="text" placeholder="${escapeAttr(
+        t('batch.inplace.backupdir.placeholder'),
+      )}" value="${escapeAttr(state.backupDir)}" />
+    </label>
+    <button id="${buttonId}" class="btn ghost">${t('btn.chooseBackupDir')}</button>
+  </div>`;
 
 const inplaceWarning = () =>
   `<div class="warning-banner" role="alert">${escapeHtml(
     t('batch.inplace.warning', { dir: backupDirDisplay() }),
   )}</div>`;
+
+// outputModeGroup is the shared new-file / replace-in-place picker. The radio
+// choice and the field it controls live inside ONE border (the dependent field
+// is indented below the radios) so they read as a single setting rather than
+// two unrelated ones. The replace hint only appears in replace mode; "new file"
+// mode shows no explanatory sentence at all.
+//   - batch:  output folder (new)       / backup folder + warning (inplace)
+//   - single: output path (new)         / backup folder + warning (inplace)
+const outputModeGroup = (name, withHint, fields) => `
+  <fieldset class="field output-mode">
+    <legend>${t('batch.mode.label')}</legend>
+    <div class="mode-radios">
+      <label class="radio"><input type="radio" name="${name}" value="new"${
+        inplace() ? '' : ' checked'
+      } /> ${t('batch.mode.new')}</label>
+      <label class="radio"><input type="radio" name="${name}" value="inplace"${
+        inplace() ? ' checked' : ''
+      } /> ${t('batch.mode.inplace')}</label>
+    </div>
+    ${
+      withHint && inplace()
+        ? `<span class="hint">${escapeHtml(t('batch.mode.hint'))}</span>`
+        : ''
+    }
+    <div class="mode-fields">${fields}</div>
+  </fieldset>`;
+
+// batchModeFields is the output-mode-dependent field of the batch card.
+const batchModeFields = () =>
+  inplace()
+    ? `${backupDirRow('batch-backup-dir', 'choose-batch-backup-dir')}${inplaceWarning()}`
+    : `<div class="row">
+      <label class="field">
+        <span>${t('batch.outdir')}</span>
+        <input id="outdir" type="text" placeholder="${escapeAttr(
+          t('batch.outdir.placeholder'),
+        )}" value="${escapeAttr(state.outdir)}" readonly />
+      </label>
+      <button id="choose-outdir" class="btn ghost">${t('btn.chooseOutdir')}</button>
+    </div>`;
+
+// singleModeFields is the output-mode-dependent field of the single-file card.
+const singleModeFields = () =>
+  inplace()
+    ? `${backupDirRow('single-backup-dir', 'choose-single-backup-dir')}${inplaceWarning()}`
+    : `<div class="row">
+      <label class="field">
+        <span>${t('label.output')}</span>
+        <input id="outnorm" type="text" placeholder="${escapeAttr(
+          t('out.norm.placeholder'),
+        )}" value="${escapeAttr(state.outnorm)}" readonly />
+      </label>
+      <button id="savenorm" class="btn ghost">${t('btn.saveas')}</button>
+    </div>`;
 
 // ---- Batch list helpers --------------------------------------------------
 
@@ -249,7 +321,9 @@ const failureReason = (err) => {
 
 const stateText = (v) => {
   const st = state.fileStatus[v.path];
-  if (!st) return '';
+  // Idle rows (just detected, not yet processed) show a dash so the column
+  // never looks like an unfinished/blank load.
+  if (!st) return '—';
   switch (st.state) {
     case 'queued':
       return t('batch.status.queued');
@@ -262,7 +336,7 @@ const stateText = (v) => {
     case 'skipped':
       return t('batch.status.skipped');
     default:
-      return '';
+      return '—';
   }
 };
 
@@ -274,21 +348,48 @@ const needsWorkFiles = () =>
     (v) => v.status === 'needs_work' && state.fileStatus[v.path]?.state !== 'failed',
   );
 
+// verdictRank orders the default listing by how much a file needs the user:
+// broken first, then needs-work, then fine. Unknown statuses sort last.
+const VERDICT_RANK = { broken: 0, needs_work: 1, ok: 2 };
+const verdictRank = (status) => VERDICT_RANK[status] ?? 3;
+
 const visibleFiles = () => {
-  let list = state.files.filter((v) => {
+  const list = state.files.filter((v) => {
     if (state.filter === 'needs') return v.status === 'needs_work';
     if (state.filter === 'broken') return v.status === 'broken';
     return true;
   });
-  if (state.sortBySize) list = [...list].sort((a, b) => b.size - a.size);
-  return list;
+  // The size checkbox overrides the default priority order entirely: "sort by
+  // size" means exactly that, with no verdict grouping.
+  if (state.sortBySize) return [...list].sort((a, b) => b.size - a.size);
+  // Otherwise group by verdict priority and keep each group in file-name order.
+  return [...list].sort(
+    (a, b) => verdictRank(a.status) - verdictRank(b.status) || a.name.localeCompare(b.name),
+  );
+};
+
+// ffmpegShort renders the header label as just "ffmpeg <version>". The full
+// `ffmpeg -version` banner also carries build-vendor noise (e.g.
+// "9.0.2-essentials_build-www.gyan.dev") that means nothing to users and
+// stretches the top bar, so the header keeps only the bare version number.
+const ffmpegShort = (v) => {
+  const m = /version\s+(\S+)/.exec(String(v));
+  if (!m) return String(v);
+  // Keep only the dotted release number ("9.0.2"), dropping vendor/build
+  // suffixes such as "-essentials_build-www.gyan.dev"; git builds without a
+  // dotted number keep their full token so we never invent a version.
+  const num = /\d+(?:\.\d+)+/.exec(m[1]);
+  return `ffmpeg ${num ? num[0] : m[1]}`;
 };
 
 const ffmpegText = () => {
-  if (state.ffmpeg.status === 'ok') return state.ffmpeg.version;
+  if (state.ffmpeg.status === 'ok') return ffmpegShort(state.ffmpeg.version);
   if (state.ffmpeg.status === 'missing') return t('ffmpeg.missing');
   return t('ffmpeg.checking');
 };
+
+// ffmpegTitle exposes the full version banner as the header tooltip.
+const ffmpegTitle = () => (state.ffmpeg.status === 'ok' ? state.ffmpeg.version : '');
 
 const log = (msg) => {
   const locale = getLang() === 'zh' ? 'zh-CN' : 'en-US';
@@ -319,13 +420,20 @@ const batchSection = () => {
   const rows = visibleFiles()
     .map((v) => {
       const open = !!state.expanded[v.path];
+      const st = state.fileStatus[v.path];
+      const retry =
+        st && st.state === 'failed'
+          ? ` <button type="button" class="btn ghost retry-btn" data-retry="${escapeAttr(
+              v.path,
+            )}">${t('btn.retry')}</button>`
+          : '';
       const main = `
         <tr class="batch-row verdict-${v.status}" data-path="${escapeAttr(v.path)}">
           <td class="col-name" title="${escapeAttr(v.path)}">${escapeHtml(relDisplay(v))}</td>
           <td class="col-size">${humanBytes(v.size)}</td>
           <td class="col-verdict">${statusText(v.status)}</td>
           <td class="col-reason">${escapeHtml(reasonText(v))}</td>
-          <td class="col-state">${escapeHtml(stateText(v))}</td>
+          <td class="col-state">${escapeHtml(stateText(v))}${retry}</td>
         </tr>`;
       if (!open) return main;
       return `${main}
@@ -339,8 +447,15 @@ const batchSection = () => {
       ? t('batch.summary.cancelled', { ok: b.done, skip: b.skipped, fail: b.failed })
       : t('batch.summary', { ok: b.done, skip: b.skipped, fail: b.failed })
     : '';
+  const current =
+    b.running && b.currentName
+      ? `<div class="muted batch-progress-text">${escapeHtml(
+          t('batch.progress.current', { index: b.currentIndex, total: b.total, name: b.currentName }),
+        )}</div>`
+      : '';
   const progress = b.running || b.finished
-    ? `<progress id="batch-progress" max="${Math.max(b.total, 1)}" value="${b.done + b.failed}"></progress>
+    ? `${current}
+       <progress id="batch-progress" max="${Math.max(b.total, 1)}" value="${b.done + b.failed}"></progress>
        <div class="muted batch-progress-text">${escapeHtml(
          t('batch.progress', { done: b.done + b.failed, total: b.total }),
        )} ${escapeHtml(summary)}</div>`
@@ -372,7 +487,7 @@ const batchSection = () => {
           t('batch.sortSize'),
         )}</span>
       </label>
-      <span class="spacer"></span>
+      <span class="batch-count muted">${escapeHtml(t('batch.count', { total, needs }))}</span>
       <button id="batch-normalize" class="btn primary" ${
         needs === 0 || b.running ? 'disabled' : ''
       }>${t('btn.batchNormalize.count', { n: needs })}</button>
@@ -488,172 +603,140 @@ function render() {
   document.querySelector('#app').innerHTML = `
   <header>
     <h1>${t('app.name')}</h1>
-    <span id="ffmpeg" class="muted">${escapeHtml(ffmpegText())}</span>
+    <span id="ffmpeg" class="muted" title="${escapeAttr(ffmpegTitle())}">${escapeHtml(ffmpegText())}</span>
     <div id="lang-switch" class="lang-switch">
       ${langButton('zh', '中文')}
       ${langButton('en', 'English')}
     </div>
   </header>
-  <p class="tagline">${escapeHtml(t('app.tagline'))}</p>
 
-  <section class="card batch-card" id="batch-card" style="--wails-drop-target: drop">
-    <h2>${t('batch.card')} <span class="sub muted">${t('batch.card.sub')}</span></h2>
+  <section class="card batch-card" id="batch-card">
+    <h2>${t('batch.card')}</h2>
     <div class="row">
-      <button id="choose-files" class="btn primary">${t('btn.chooseFiles')}</button>
-      <button id="choose-folder" class="btn">${t('btn.chooseFolder')}</button>
-      <button id="clear-list" class="btn ghost">${t('btn.clear')}</button>
-      <button id="scan-again" class="btn ghost">${t('btn.scan')}</button>
+      <button id="choose-folder" class="btn primary">${t('btn.chooseFolder')}</button>
+      <button id="choose-files" class="btn">${t('btn.chooseFiles')}</button>
+      <button id="clear-list" class="btn">${t('btn.clear')}</button>
+      <button id="scan-again" class="btn">${t('btn.scan')}</button>
     </div>
     <div class="row">
-      <label class="field">
-        <span>${t('batch.outdir')}</span>
-        <input id="outdir" type="text" placeholder="${escapeAttr(
-          t('batch.outdir.hint'),
-        )}" value="${escapeAttr(state.outdir)}" readonly ${inplace() ? 'disabled' : ''} />
-      </label>
-      <button id="choose-outdir" class="btn ghost" ${inplace() ? 'disabled' : ''}>${t('btn.chooseOutdir')}</button>
-    </div>
-    <div class="row">
-      ${outputModeRadios('output-mode-batch')}
-    </div>
-    ${inplace() ? inplaceWarning() : ''}
-    <div class="row">
-      <label class="field">
-        <span>${t('batch.inplace.backupdir')}</span>
-        <input id="batch-backup-dir" type="text" placeholder="${escapeAttr(
-          t('batch.inplace.backupdir.hint'),
-        )}" value="${escapeAttr(state.backupDir)}" ${inplace() ? '' : 'disabled'} />
-        <span class="hint">${escapeHtml(t('batch.inplace.backupdir.hint'))}</span>
-      </label>
-      <button id="choose-batch-backup-dir" class="btn ghost" ${
-        inplace() ? '' : 'disabled'
-      }>${t('btn.chooseBackupDir')}</button>
+      ${outputModeGroup('output-mode-batch', true, batchModeFields())}
     </div>
     ${batchSection()}
   </section>
 
-  <section class="card">
+  <details class="card single-card" id="single-card"${state.singleOpen ? ' open' : ''}>
+    <summary class="card-summary"><h2>${t('single.card')}</h2></summary>
+
     <div class="row">
       <label class="field">
         <span>${t('label.input')}</span>
         <input id="input" type="text" placeholder="${escapeAttr(t('input.placeholder'))}" value="${escapeAttr(
           state.input,
         )}" readonly />
-        <span class="hint">${escapeHtml(t('hint.input'))}</span>
       </label>
       <button id="choose" class="btn">${t('btn.choose')}</button>
       <button id="inspect" class="btn">${t('btn.inspect')}</button>
     </div>
-  </section>
 
-  <section class="card" id="report-card" ${state.showReport ? '' : 'hidden'}>
-    <h2>${t('card.diagnosis')}</h2>
-    ${state.gain ? `<pre class="gain">${escapeHtml(gainText(state.gain))}</pre>` : ''}
-    <pre id="report">${escapeHtml(state.report ? fmt(state.report) : '')}</pre>
-  </section>
+    <div class="subpane" id="report-card" ${state.showReport ? '' : 'hidden'}>
+      <h3>${t('card.diagnosis')}</h3>
+      ${state.gain ? `<pre class="gain">${escapeHtml(gainText(state.gain))}</pre>` : ''}
+      <pre id="report">${escapeHtml(state.report ? fmt(state.report) : '')}</pre>
+    </div>
 
-  <section class="card">
-    <h2>${t('card.normalize')} <span class="sub muted">${t('card.normalize.sub')}</span></h2>
-    <div class="row">
-      <label class="field">
-        <span>${t('label.format')}</span>
-        <select id="format">
-          <option value="progressive"${state.format === 'progressive' ? ' selected' : ''}>${t('opt.progressive')}</option>
-          <option value="fmp4"${state.format === 'fmp4' ? ' selected' : ''}>${t('opt.fmp4')}</option>
-        </select>
-        <span class="hint">${escapeHtml(t('hint.format'))}</span>
-      </label>
-    </div>
-    <div class="row">
-      <label class="field">
-        <span>${t('label.output')}</span>
-        <input id="outnorm" type="text" placeholder="${escapeAttr(
-          t('out.norm.placeholder'),
-        )}" value="${escapeAttr(state.outnorm)}" readonly ${inplace() ? 'disabled' : ''} />
-        <span class="hint">${escapeHtml(t('hint.output.norm'))}</span>
-      </label>
-      <button id="savenorm" class="btn ghost" ${inplace() ? 'disabled' : ''}>${t('btn.saveas')}</button>
-      <button id="normalize" class="btn primary">${t('btn.normalize')}</button>
-    </div>
-    <div class="row">
-      ${outputModeRadios('output-mode-single')}
-    </div>
-    ${inplace() ? inplaceWarning() : ''}
-    <details class="advanced" id="advanced-norm"${state.normAdvanced ? ' open' : ''}>
-      <summary>${t('advanced.norm')}</summary>
+    <div class="subpane">
+      <h3>${t('card.normalize')}</h3>
       <div class="row">
-        <label id="window-label" class="field"${state.format === 'fmp4' ? ' hidden' : ''}>
-          <span>${t('label.window')}</span>
-          <input id="window" type="number" value="${escapeAttr(state.window)}" min="200" step="100" />
-          <span class="hint">${escapeHtml(t('hint.window'))}</span>
-        </label>
-        <label id="frag-label" class="field"${state.format === 'fmp4' ? '' : ' hidden'}>
-          <span>${t('label.frag')}</span>
-          <input id="frag" type="number" value="${escapeAttr(state.frag)}" min="500" step="500" />
-          <span class="hint">${escapeHtml(t('hint.frag'))}</span>
+        <label class="field">
+          <span>${t('label.format')} ${info('info.format')}</span>
+          <select id="format">
+            <option value="progressive"${state.format === 'progressive' ? ' selected' : ''}>${t('opt.progressive')}</option>
+            <option value="fmp4"${state.format === 'fmp4' ? ' selected' : ''}>${t('opt.fmp4')}</option>
+          </select>
+          <span class="hint">${escapeHtml(t('hint.format'))}</span>
         </label>
       </div>
-    </details>
-  </section>
+      <div class="row">
+        ${outputModeGroup('output-mode-single', false, singleModeFields())}
+      </div>
+      <div class="row">
+        <button id="normalize" class="btn primary">${t('btn.normalize')}</button>
+      </div>
+      <details class="advanced" id="advanced-norm"${state.normAdvanced ? ' open' : ''}>
+        <summary>${t('advanced.norm')}</summary>
+        <div class="row">
+          <label id="window-label" class="field"${state.format === 'fmp4' ? ' hidden' : ''}>
+            <span>${t('label.window')} ${info('info.window')}</span>
+            <input id="window" type="number" value="${escapeAttr(state.window)}" min="200" step="100" />
+            <span class="hint">${escapeHtml(t('hint.window'))}</span>
+          </label>
+          <label id="frag-label" class="field"${state.format === 'fmp4' ? '' : ' hidden'}>
+            <span>${t('label.frag')} ${info('info.frag')}</span>
+            <input id="frag" type="number" value="${escapeAttr(state.frag)}" min="500" step="500" />
+            <span class="hint">${escapeHtml(t('hint.frag'))}</span>
+          </label>
+        </div>
+      </details>
+    </div>
 
-  <details class="card" id="reencode-card"${state.reencodeOpen ? ' open' : ''}>
-    <summary class="card-summary">
-      <h2>${t('card.reencode')} <span class="sub muted">${t('card.reencode.sub')}</span></h2>
-    </summary>
-    <div class="row">
-      <label class="field">
-        <span>${t('label.codec')}</span>
-        <select id="vcodec">
-          <option value="h264"${state.vcodec === 'h264' ? ' selected' : ''}>H.264</option>
-          <option value="h265"${state.vcodec === 'h265' ? ' selected' : ''}>H.265</option>
-          <option value="copy"${state.vcodec === 'copy' ? ' selected' : ''}>${t('opt.codec.copy')}</option>
-        </select>
-        <span class="hint">${escapeHtml(t('hint.codec'))}</span>
-      </label>
-      <label class="field">
-        <span>${t('label.hw')}</span>
-        <select id="hw">
-          <option value="auto"${state.hw === 'auto' ? ' selected' : ''}>${t('opt.hw.auto')}</option>
-          <option value="on"${state.hw === 'on' ? ' selected' : ''}>${t('opt.hw.on')}</option>
-          <option value="off"${state.hw === 'off' ? ' selected' : ''}>${t('opt.hw.off')}</option>
-        </select>
-        <span class="hint">${escapeHtml(t('hint.hw'))}</span>
-      </label>
-      <label class="field">
-        <span>${t('label.crf')}</span>
-        <input id="crf" type="number" value="${escapeAttr(state.crf)}" min="0" max="51" />
-        <span class="hint">${escapeHtml(t('hint.crf'))}</span>
-      </label>
-      <label class="field">
-        <span>${t('label.preset')}</span>
-        <select id="preset">
-          <option${state.preset === 'ultrafast' ? ' selected' : ''}>ultrafast</option><option${
-            state.preset === 'veryfast' ? ' selected' : ''
-          }>veryfast</option>
-          <option${state.preset === 'medium' ? ' selected' : ''}>medium</option><option${
-            state.preset === 'slow' ? ' selected' : ''
-          }>slow</option>
-        </select>
-        <span class="hint">${escapeHtml(t('hint.preset'))}</span>
-      </label>
-      <label class="field">
-        <span>${t('label.gop')}</span>
-        <input id="gop" type="number" value="${escapeAttr(state.gop)}" min="0.5" step="0.5" />
-        <span class="hint">${escapeHtml(t('hint.gop'))}</span>
-      </label>
-    </div>
-    <div class="row">
-      <label class="field">
-        <span>${t('label.output')}</span>
-        <input id="outreenc" type="text" placeholder="${escapeAttr(
-          t('out.reenc.placeholder'),
-        )}" value="${escapeAttr(state.outreenc)}" readonly />
-        <span class="hint">${escapeHtml(t('hint.output.reenc'))}</span>
-      </label>
-      <button id="savetreenc" class="btn ghost">${t('btn.saveas')}</button>
-      <button id="reencode" class="btn">${t('btn.reencode')}</button>
-    </div>
-    <progress id="progress" max="1" value="0"></progress>
+    <details class="subdetails" id="reencode-card"${state.reencodeOpen ? ' open' : ''}>
+      <summary>
+        <h3>${t('card.reencode')} <span class="hint">${escapeHtml(t('card.reencode.sub'))}</span></h3>
+      </summary>
+      <div class="row">
+        <label class="field">
+          <span>${t('label.codec')} ${info('info.codec')}</span>
+          <select id="vcodec">
+            <option value="h264"${state.vcodec === 'h264' ? ' selected' : ''}>H.264</option>
+            <option value="h265"${state.vcodec === 'h265' ? ' selected' : ''}>H.265</option>
+            <option value="copy"${state.vcodec === 'copy' ? ' selected' : ''}>${t('opt.codec.copy')}</option>
+          </select>
+          <span class="hint">${escapeHtml(t('hint.codec'))}</span>
+        </label>
+        <label class="field">
+          <span>${t('label.hw')} ${info('info.hw')}</span>
+          <select id="hw">
+            <option value="auto"${state.hw === 'auto' ? ' selected' : ''}>${t('opt.hw.auto')}</option>
+            <option value="on"${state.hw === 'on' ? ' selected' : ''}>${t('opt.hw.on')}</option>
+            <option value="off"${state.hw === 'off' ? ' selected' : ''}>${t('opt.hw.off')}</option>
+          </select>
+          <span class="hint">${escapeHtml(t('hint.hw'))}</span>
+        </label>
+        <label class="field">
+          <span>${t('label.crf')} ${info('info.crf')}</span>
+          <input id="crf" type="number" value="${escapeAttr(state.crf)}" min="0" max="51" />
+          <span class="hint">${escapeHtml(t('hint.crf'))}</span>
+        </label>
+        <label class="field">
+          <span>${t('label.preset')} ${info('info.preset')}</span>
+          <select id="preset">
+            <option${state.preset === 'ultrafast' ? ' selected' : ''}>ultrafast</option><option${
+              state.preset === 'veryfast' ? ' selected' : ''
+            }>veryfast</option>
+            <option${state.preset === 'medium' ? ' selected' : ''}>medium</option><option${
+              state.preset === 'slow' ? ' selected' : ''
+            }>slow</option>
+          </select>
+          <span class="hint">${escapeHtml(t('hint.preset'))}</span>
+        </label>
+        <label class="field">
+          <span>${t('label.gop')} ${info('info.gop')}</span>
+          <input id="gop" type="number" value="${escapeAttr(state.gop)}" min="0.5" step="0.5" />
+          <span class="hint">${escapeHtml(t('hint.gop'))}</span>
+        </label>
+      </div>
+      <div class="row">
+        <label class="field">
+          <span>${t('label.output')}</span>
+          <input id="outreenc" type="text" placeholder="${escapeAttr(
+            t('out.reenc.placeholder'),
+          )}" value="${escapeAttr(state.outreenc)}" readonly />
+        </label>
+        <button id="savetreenc" class="btn ghost">${t('btn.saveas')}</button>
+        <button id="reencode" class="btn">${t('btn.reencode')}</button>
+      </div>
+      <progress id="progress" max="1" value="0"></progress>
+    </details>
   </details>
 
   ${backupSection()}
@@ -676,6 +759,8 @@ function bindEvents() {
 
   // Remember open/closed state across re-renders (language switch, format
   // change) without persisting it to disk.
+  const single = $('single-card');
+  if (single) single.ontoggle = () => { state.singleOpen = single.open; };
   const adv = $('advanced-norm');
   if (adv) adv.ontoggle = () => { state.normAdvanced = adv.open; };
   const re = $('reencode-card');
@@ -712,25 +797,18 @@ function bindEvents() {
     state.expanded = {};
     state.filter = 'all';
     state.sortBySize = false;
-    state.batch = {
-      running: false,
-      done: 0,
-      skipped: 0,
-      failed: 0,
-      total: 0,
-      finished: false,
-      cancelled: false,
-      beforeFirstPlay: 0,
-      afterFirstPlay: 0,
-    };
+    state.batch = emptyBatch();
     render();
     log(t('log.cleared'));
   };
   const sc = $('scan-again');
   if (sc) sc.onclick = () => {
-    const paths = state.scanRoots.length ? state.scanRoots : state.files.map((v) => v.path);
+    // Re-scan exactly what the list currently holds, keeping the original
+    // scan roots so a folder-relative list still shows subpaths afterwards.
+    const listPaths = state.files.map((v) => v.path);
+    const paths = listPaths.length ? listPaths : state.scanRoots;
     if (!paths.length) return log(t('log.noFile'));
-    scanPaths(paths);
+    scanPaths(paths, state.scanRoots);
   };
   const cod = $('choose-outdir');
   if (cod) cod.onclick = async () => {
@@ -752,6 +830,12 @@ function bindEvents() {
   const table = $('batch-table');
   if (table) {
     table.onclick = (e) => {
+      const retryBtn = e.target.closest('button[data-retry]');
+      if (retryBtn) {
+        e.stopPropagation();
+        retryOne(retryBtn.dataset.retry);
+        return;
+      }
       const row = e.target.closest('tr[data-path]');
       if (!row) return;
       const p = row.dataset.path;
@@ -770,6 +854,8 @@ function bindEvents() {
   };
   const cbb = $('choose-batch-backup-dir');
   if (cbb) cbb.onclick = chooseBackupFt;
+  const csb = $('choose-single-backup-dir');
+  if (csb) csb.onclick = chooseBackupFt;
   const cbm = $('choose-backup-mgmt-dir');
   if (cbm) cbm.onclick = chooseBackupFt;
   const lb = $('list-backups');
@@ -812,6 +898,7 @@ function bindEvents() {
       state.report = await Probe(state.input);
       state.gain = null;
       state.showReport = true;
+      state.singleOpen = true;
       render();
       log(t('log.inspected'));
     } catch (e) {
@@ -841,9 +928,11 @@ function bindEvents() {
   mirror('hw', 'hw');
   mirror('preset', 'preset');
   mirror('batch-backup-dir', 'backupDir');
+  mirror('single-backup-dir', 'backupDir');
   mirror('backup-mgmt-dir', 'backupDir');
 
-  $('savenorm').onclick = async () => {
+  const sn = $('savenorm');
+  if (sn) sn.onclick = async () => {
     const p = await ChooseOutput('output.mp4');
     if (p) {
       state.outnorm = p;
@@ -945,10 +1034,12 @@ async function refreshAfterBatch(res) {
   state.fileStatus = status;
 }
 
-async function scanPaths(paths) {
+async function scanPaths(paths, roots) {
   if (!paths || !paths.length) return;
   state.scanning = true;
-  state.scanRoots = [...paths];
+  // roots (when provided) preserve the original folder context for relative
+  // display; a re-scan of concrete file paths passes the previous roots.
+  state.scanRoots = roots && roots.length ? [...roots] : [...paths];
   render();
   log(t('log.scanning', { n: paths.length }));
   try {
@@ -957,17 +1048,7 @@ async function scanPaths(paths) {
     state.fileStatus = {};
     state.expanded = {};
     state.scanning = false;
-    state.batch = {
-      running: false,
-      done: 0,
-      skipped: 0,
-      failed: 0,
-      total: 0,
-      finished: false,
-      cancelled: false,
-      beforeFirstPlay: 0,
-      afterFirstPlay: 0,
-    };
+    state.batch = emptyBatch();
     const ok = state.files.filter((v) => v.status === 'ok').length;
     const needs = state.files.filter((v) => v.status === 'needs_work').length;
     const broken = state.files.filter((v) => v.status === 'broken').length;
@@ -985,17 +1066,7 @@ async function startBatch() {
   if (!targets.length) return log(t('batch.nothing'));
   state.fileStatus = {};
   for (const v of targets) state.fileStatus[v.path] = { state: 'queued' };
-  state.batch = {
-    running: true,
-    done: 0,
-    skipped: 0,
-    failed: 0,
-    total: targets.length,
-    finished: false,
-    cancelled: false,
-    beforeFirstPlay: 0,
-    afterFirstPlay: 0,
-  };
+  state.batch = { ...emptyBatch(), running: true, total: targets.length };
   render();
   log(t('log.batchStart', { n: targets.length }));
 
@@ -1042,6 +1113,76 @@ async function startBatch() {
   );
   await refreshAfterBatch(res);
   log(t('log.batchRefreshed'));
+  render();
+}
+
+// retryOne re-runs a single failed file through the same batch pipeline and
+// updates just that row (successful retries swap in the freshly scanned
+// output), so the rest of the list keeps its existing state.
+async function retryOne(path) {
+  const v = state.files.find((x) => x.path === path);
+  if (!v) return;
+  state.fileStatus[path] = { state: 'queued' };
+  state.batch = { ...emptyBatch(), running: true, total: 1, currentIndex: 1, currentName: basename(path) };
+  render();
+  log(t('log.retry', { name: basename(path) }));
+
+  let res;
+  try {
+    res = await BatchNormalize({
+      inputs: [path],
+      outdir: inplace() ? '' : state.outdir,
+      format: state.format,
+      windowMs: Number(state.window),
+      fragmentMs: Number(state.frag),
+      inPlace: inplace(),
+      backupDir: inplace() ? state.backupDir : '',
+    });
+  } catch (e) {
+    state.batch = { ...emptyBatch(), finished: true, failed: 1, total: 1 };
+    state.fileStatus[path] = { state: 'failed', error: String(e) };
+    log(t('log.retryFailed', { err: e }));
+    render();
+    return;
+  }
+
+  const o = (res.results || [])[0] || { status: 'failed', error: '' };
+  state.batch = {
+    ...emptyBatch(),
+    finished: true,
+    total: 1,
+    done: o.status === 'done' ? 1 : 0,
+    failed: o.status === 'failed' ? 1 : 0,
+  };
+
+  if (o.status === 'done') {
+    const out = o.output || path;
+    let refreshed;
+    try {
+      refreshed = await ScanPaths([out]);
+    } catch (e) {
+      refreshed = [];
+    }
+    const nv = (refreshed || [])[0];
+    if (nv) {
+      state.files = state.files.map((x) => (x.path === path ? nv : x));
+      const seen = new Set();
+      state.files = state.files.filter((x) => {
+        const key = toSlashes(x.path).toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      delete state.fileStatus[path];
+      state.fileStatus[nv.path] = { state: 'done', gain: o.gain };
+    } else {
+      state.fileStatus[path] = { state: 'done', gain: o.gain };
+    }
+    log(t('log.retryDone', { name: basename(out) }));
+  } else {
+    state.fileStatus[path] = { state: 'failed', error: o.error };
+    log(t('log.retryFailed', { err: o.error }));
+  }
   render();
 }
 
@@ -1099,6 +1240,7 @@ const showResult = (res) => {
   state.report = res.report || res.Report;
   state.gain = res.gain || res.Gain || null;
   state.showReport = true;
+  state.singleOpen = true;
   render();
   log(t('log.done', { path: res.output || res.Output }));
 };
@@ -1111,7 +1253,10 @@ async function refreshFFmpeg() {
     state.ffmpeg = { status: 'missing', version: '' };
   }
   const el = $('ffmpeg');
-  if (el) el.textContent = ffmpegText();
+  if (el) {
+    el.textContent = ffmpegText();
+    el.title = ffmpegTitle();
+  }
 }
 
 // openInitialTargets handles directories/files passed on the command line. It
@@ -1148,12 +1293,15 @@ EventsOn('reencode:progress', (p) => {
   bar.title = `${secs.toFixed(1)}s  frame ${p.Frame}  ${p.Speed}`;
 });
 
-// Batch progress: update the per-row status column and the overall bar.
+// Batch progress: update the per-row status column, the running-file line and
+// the overall bar.
 EventsOn('batch:progress', (p) => {
   if (!p) return;
   if (p.status === 'running') {
     const pct = p.total > 0 ? Math.round(((p.index - 1) / p.total) * 100) : 0;
     state.fileStatus[p.path] = { state: 'running', pct };
+    state.batch.currentIndex = p.index;
+    state.batch.currentName = basename(p.path);
   } else if (p.status === 'done') {
     state.batch.done++;
     state.fileStatus[p.path] = { state: 'done' };
@@ -1164,10 +1312,12 @@ EventsOn('batch:progress', (p) => {
   render();
 });
 
-// Files dropped onto the batch card start a scan.
-EventsOn('files:dropped', (paths) => {
+// Native drag & drop: register the Wails drop handler so dropping files or
+// folders anywhere in the window goes through the same scan path as the
+// "choose" buttons. useDropTarget=false means any drop is accepted.
+OnFileDrop((_x, _y, paths) => {
   if (Array.isArray(paths) && paths.length) scanPaths(paths);
-});
+}, false);
 
 render();
 refreshFFmpeg();
