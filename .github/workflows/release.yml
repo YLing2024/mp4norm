@@ -33,16 +33,88 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
           mkdir -p dist
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} CGO_ENABLED=0 \
-            go build -trimpath -ldflags "-s -w" \
+            go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
             -o "dist/mp4norm-${{ matrix.goos }}-${{ matrix.goarch }}${ext}" ./cmd/mp4norm
       - uses: actions/upload-artifact@v4
         with:
           name: mp4norm-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
 
+  gui:
+    name: gui (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, name: windows }
+          - { os: macos-latest, name: darwin }
+          - { os: ubuntu-latest, name: linux }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Linux GUI dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Install Wails
+        shell: bash
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      - name: Build GUI
+        working-directory: gui
+        shell: bash
+        run: wails build
+      - name: Package GUI (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist-gui
+          cp gui/build/bin/mp4norm.exe dist-gui/mp4norm-windows-amd64-gui.exe
+      - name: Package GUI (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p dist-gui
+          (
+            cd gui/build/bin
+            zip -qry "$GITHUB_WORKSPACE/dist-gui/mp4norm-darwin-arm64-gui.zip" mp4norm.app
+          )
+      - name: Package GUI (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist-gui
+          cp gui/build/bin/mp4norm dist-gui/mp4norm
+          cat > dist-gui/README-gui-linux.txt <<'EOF'
+          mp4norm GUI (Linux, amd64)
+
+          运行依赖：libwebkit2gtk-4.1（Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-0；
+          Fedora: sudo dnf install webkit2gtk4.1）
+
+          运行：
+            tar -xzf mp4norm-linux-amd64-gui.tar.gz
+            ./mp4norm
+
+          只想要命令行版本的话，下载 mp4norm-linux-amd64（无 -gui 后缀）那个即可。
+          EOF
+          tar -czf dist-gui/mp4norm-linux-amd64-gui.tar.gz -C dist-gui mp4norm README-gui-linux.txt
+          rm -f dist-gui/mp4norm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mp4norm-gui-${{ matrix.name }}
+          path: dist-gui/*
+
   release:
     name: publish
-    needs: cli
+    needs: [cli, gui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
