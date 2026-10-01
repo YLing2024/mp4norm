@@ -45,6 +45,24 @@ When the source cannot be fixed by container surgery (very sparse keyframes, non
 - Concurrency across files.
 - Hardware encoders for the re-encode path.
 
+## Measured on real files
+
+Test environment: Windows 11 · Go 1.27 · H: drive (7200rpm-class mechanical disk) · measured 2026-10-01
+
+| Scenario | Result |
+| --- | --- |
+| Normalizing a real 1.2 GB video (index at the end) | **15.9 s** |
+| Same file, "replace the original" mode (with backup) | **23.7 s** |
+| Peak memory while normalizing the 1.2 GB file | **67 MB** (the whole file is never read into memory) |
+| Bytes that must be read before the first playable frame | **1.2 GiB → 5.7 MiB** |
+| Scanning 30 real videos (191 MB ~ 1811 MB) | **0.3 s** (only the file header and footer are read) |
+| A 40 KB small file | Instant (milliseconds) |
+
+For comparison: on the same machine, `ffmpeg -c copy +faststart` on an 800 MB
+oddly-muxed file takes about 18 s to write and another ~36 s to reorder moov
+(~54 s total) — mp4norm takes the container-surgery path and handles 1.2 GB in
+about 16 s.
+
 ## Usage
 
 CLI:
