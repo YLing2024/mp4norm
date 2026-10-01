@@ -82,6 +82,8 @@ func run(args []string) error {
 		return runForget(args[1:])
 	case "tmp":
 		return runTmp(args[1:])
+	case "watch":
+		return runWatch(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			return fmt.Errorf("help: unexpected extra argument(s): %s", strings.Join(args[1:], " "))
@@ -966,6 +968,11 @@ Commands:
   forget [-backup-dir dir] --yes <file>
                                      Delete a file's backups (without --yes, just list them)
   tmp <directory...>                 List leftover temp files from an interrupted run
+  watch [-interval 5m] [-outdir dir] [-in-place] [-backup-dir dir] [-once] [-quiet] <dir...>
+                                     Poll folders and normalize new files once they stop
+                                     being written. -in-place (with a backup) and -outdir
+                                     are mutually exclusive; -once runs one round and exits
+                                     with scan-style codes (0/1/2).
   reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
                                      Optional re-encode to fix sparse keyframes / VFR
   version                            Print the version

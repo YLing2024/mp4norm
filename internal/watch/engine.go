@@ -139,14 +139,14 @@ func (r *Runner) Pass() Summary {
 // that watch has never seen, while a file that is still being appended changes
 // between the two passes and is skipped.
 func (r *Runner) RunOnce() Summary {
-	r.observe()
+	r.Observe()
 	return r.Pass()
 }
 
-// observe updates the recorded (size, mtime) for every candidate without
-// classifying, processing or logging. It is used to prime the first pass of a
-// -once run.
-func (r *Runner) observe() {
+// Observe updates the recorded (size, mtime) for every candidate without
+// classifying, processing or logging. It primes the first pass of a -once run
+// so a folder watch has never seen can be handled in one invocation.
+func (r *Runner) Observe() {
 	files, _ := Collect(r.Root)
 	for _, path := range files {
 		cur, err := Stat(path)
