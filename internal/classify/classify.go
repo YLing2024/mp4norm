@@ -228,7 +228,7 @@ func classifyReport(rep *probe.Report, notInterleaved bool) (Status, []Reason) {
 // formatter with a pointless trailing ".0" dropped, so "955 MiB" reads cleanly
 // while "1.2 GiB" keeps its precision.
 func sizeText(n int64) string {
-	return strings.TrimSuffix(probe.HumanBytes(n), ".0")
+	return strings.Replace(probe.HumanBytes(n), ".0 ", " ", 1)
 }
 
 // Text renders a reason as one plain-language sentence. Unknown codes fall
