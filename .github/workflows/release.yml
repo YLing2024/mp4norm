@@ -113,7 +113,7 @@ jobs:
           只想要命令行版本的话，下载 mp4norm-linux-amd64（无 -gui 后缀）那个即可。
           EOF
           tar -czf dist-gui/mp4norm-linux-amd64-gui.tar.gz -C dist-gui mp4norm README-gui-linux.txt
-          rm -f dist-gui/mp4norm
+          rm -f dist-gui/mp4norm dist-gui/README-gui-linux.txt
       - uses: actions/upload-artifact@v4
         with:
           name: mp4norm-gui-${{ matrix.name }}
