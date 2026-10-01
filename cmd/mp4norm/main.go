@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/YLing2024/mp4norm/internal/ffmpeg"
@@ -46,6 +48,8 @@ func run(args []string) error {
 		return runNormalize(args[1:])
 	case "reencode":
 		return runReencode(args[1:])
+	case "batch":
+		return runBatch(args[1:])
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return nil
@@ -91,18 +95,26 @@ func runNormalize(args []string) error {
 	}
 	in := fs.Arg(0)
 	outPath := outputPath(*out, in, ".norm.mp4")
+	fn, err := normalizeFunc(*format, *window, *fragMs)
+	if err != nil {
+		return err
+	}
+	return transform(in, outPath, fn)
+}
 
-	switch strings.ToLower(*format) {
+// normalizeFunc builds the lossless transform for the requested output format.
+func normalizeFunc(format string, windowMs, fragMs int) (func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error), error) {
+	switch strings.ToLower(format) {
 	case "progressive", "mp4", "prog":
-		return transform(in, outPath, func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
-			return normalize.Interleave(src, dst, normalize.InterleaveOptions{WindowMs: *window})
-		})
+		return func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
+			return normalize.Interleave(src, dst, normalize.InterleaveOptions{WindowMs: windowMs})
+		}, nil
 	case "fmp4", "fragmented":
-		return transform(in, outPath, func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
-			return normalize.Fragment(src, dst, normalize.FragmentOptions{FragmentMs: *fragMs})
-		})
+		return func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
+			return normalize.Fragment(src, dst, normalize.FragmentOptions{FragmentMs: fragMs})
+		}, nil
 	default:
-		return fmt.Errorf("normalize: unknown -format %q (want progressive or fmp4)", *format)
+		return nil, fmt.Errorf("unknown format %q (want progressive or fmp4)", format)
 	}
 }
 
@@ -168,18 +180,18 @@ func runReencode(args []string) error {
 	return nil
 }
 
-// transform runs a normalizer function against in, writing to outPath
-// atomically via a temp file, then re-probes the result.
-func transform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)) error {
+// applyTransform runs a normalizer function against in, writing to outPath
+// atomically via a temp file.
+func applyTransform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)) (*normalize.Result, error) {
 	inFile, err := os.Open(in)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer inFile.Close()
 
 	tmp, err := os.CreateTemp(filepath.Dir(outPath), ".mp4norm-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after a successful rename
@@ -187,12 +199,21 @@ func transform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*
 	res, err := fn(inFile, tmp)
 	if err != nil {
 		tmp.Close()
-		return err
+		return nil, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.Rename(tmpName, outPath); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// transform is applyTransform plus terminal output and a post-run probe.
+func transform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)) error {
+	res, err := applyTransform(in, outPath, fn)
+	if err != nil {
 		return err
 	}
 
@@ -207,6 +228,114 @@ func transform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*
 	fmt.Println()
 	fmt.Print(rep.String())
 	return nil
+}
+
+func runBatch(args []string) error {
+	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
+	jobs := fs.Int("jobs", runtime.NumCPU(), "parallel workers")
+	format := fs.String("format", "progressive", "output format: progressive or fmp4")
+	window := fs.Int("window", 1000, "interleave window in milliseconds (progressive)")
+	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
+	outdir := fs.String("outdir", "", "output directory (default: next to each input)")
+	suffix := fs.String("suffix", ".norm.mp4", "output filename suffix")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	inputs, err := collectInputs(fs.Args())
+	if err != nil {
+		return err
+	}
+	if len(inputs) == 0 {
+		return fmt.Errorf("batch: no input files")
+	}
+	fn, err := normalizeFunc(*format, *window, *fragMs)
+	if err != nil {
+		return err
+	}
+	if *outdir != "" {
+		if err := os.MkdirAll(*outdir, 0o755); err != nil {
+			return err
+		}
+	}
+
+	if *jobs < 1 {
+		*jobs = 1
+	}
+	sem := make(chan struct{}, *jobs)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var okCount, failCount int
+	start := time.Now()
+
+	for _, in := range inputs {
+		in := in
+		out := batchOutput(in, *outdir, *suffix)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if _, err := applyTransform(in, out, fn); err != nil {
+				mu.Lock()
+				failCount++
+				mu.Unlock()
+				fmt.Fprintf(os.Stderr, "fail %s: %v\n", in, err)
+				return
+			}
+			mu.Lock()
+			okCount++
+			mu.Unlock()
+			fmt.Printf("ok   %s -> %s\n", in, out)
+		}()
+	}
+	wg.Wait()
+
+	fmt.Printf("\n%d ok, %d failed in %s\n", okCount, failCount, time.Since(start).Round(time.Millisecond))
+	if failCount > 0 {
+		return fmt.Errorf("batch: %d file(s) failed", failCount)
+	}
+	return nil
+}
+
+// collectInputs expands directories into their video files and keeps plain
+// file arguments as-is.
+func collectInputs(args []string) ([]string, error) {
+	var inputs []string
+	for _, a := range args {
+		fi, err := os.Stat(a)
+		if err != nil {
+			return nil, err
+		}
+		if !fi.IsDir() {
+			inputs = append(inputs, a)
+			continue
+		}
+		err = filepath.WalkDir(a, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			switch strings.ToLower(filepath.Ext(path)) {
+			case ".mp4", ".m4v", ".mov":
+				inputs = append(inputs, path)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return inputs, nil
+}
+
+func batchOutput(in, outdir, suffix string) string {
+	base := strings.TrimSuffix(filepath.Base(in), filepath.Ext(in)) + suffix
+	if outdir == "" {
+		return filepath.Join(filepath.Dir(in), base)
+	}
+	return filepath.Join(outdir, base)
 }
 
 func outputPath(out, in, suffix string) string {
@@ -231,6 +360,8 @@ Commands:
                                      Move moov to the front and interleave (progressive),
                                      or write a fragmented MP4 with sidx (fmp4). Lossless.
   faststart [-o out] <input>         Only move moov to the front (lossless, no re-encode)
+  batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
+                                     Normalize many files or directories in parallel
   reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
                                      Optional re-encode to fix sparse keyframes / VFR
   version                            Print the version
