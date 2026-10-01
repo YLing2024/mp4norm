@@ -41,6 +41,29 @@ func TestMoovAtEndNeedsWork(t *testing.T) {
 	}
 }
 
+func TestMoovAtEndReasonIncludesSize(t *testing.T) {
+	const size = 955 << 20 // 955 MiB
+	_, reasons := classifyReport(&probe.Report{MoovPosition: probe.MoovEnd, MdatCount: 1, FileSize: size}, false)
+	var got *Reason
+	for i := range reasons {
+		if reasons[i].Code == CodeMoovAtEnd {
+			got = &reasons[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("reasons = %+v, want moov-at-end", reasons)
+	}
+	if got.Size != size {
+		t.Fatalf("size = %d, want %d", got.Size, size)
+	}
+	if txt := got.Text("zh"); !strings.Contains(txt, "955 MiB") {
+		t.Fatalf("zh text = %q, want the file size", txt)
+	}
+	if txt := got.Text("en"); !strings.Contains(txt, "~955 MiB") {
+		t.Fatalf("en text = %q, want the file size", txt)
+	}
+}
+
 func TestFragmentedMdatNeedsWorkWithCount(t *testing.T) {
 	status, reasons := classifyReport(rep(probe.MoovFront, 4866), false)
 	if status != StatusNeedsWork {
