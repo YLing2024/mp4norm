@@ -80,6 +80,8 @@ func run(args []string) error {
 		return runRestore(args[1:])
 	case "forget":
 		return runForget(args[1:])
+	case "tmp":
+		return runTmp(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			return fmt.Errorf("help: unexpected extra argument(s): %s", strings.Join(args[1:], " "))
@@ -794,6 +796,40 @@ func runForget(args []string) error {
 	return nil
 }
 
+// runTmp lists the rewrite temp files found in the given directories. It is
+// read-only: the next rewrite sweeps stale files automatically, so this exists
+// purely to show a user what an interrupted run left behind and how big it is.
+func runTmp(args []string) error {
+	fs := flag.NewFlagSet("tmp", flag.ContinueOnError)
+	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+		return err
+	}
+	dirs := fs.Args()
+	if len(dirs) == 0 {
+		return fmt.Errorf("tmp: missing <directory...>")
+	}
+	now := time.Now()
+	found := 0
+	fmt.Println("残留临时文件：")
+	for _, dir := range dirs {
+		for _, t := range safefile.ListTempFiles(dir) {
+			state := "较新"
+			if now.Sub(t.ModTime) >= safefile.StaleTempAfter {
+				state = "陈旧"
+			}
+			fmt.Printf("  [%s] %s  %s  %s\n",
+				state, probe.HumanBytes(t.Size), now.Sub(t.ModTime).Round(time.Minute), t.Path)
+			found++
+		}
+	}
+	if found == 0 {
+		fmt.Println("  没有发现。")
+		return nil
+	}
+	fmt.Printf("\n共 %d 个（陈旧的会在下次规整时自动清理）。\n", found)
+	return nil
+}
+
 // collectInputs expands directories into their video files and keeps plain
 // file arguments as-is.
 func collectInputs(args []string) ([]string, error) {
@@ -929,6 +965,7 @@ Commands:
   restore [-backup-dir dir] <file>   Put a file's newest backup back in place
   forget [-backup-dir dir] --yes <file>
                                      Delete a file's backups (without --yes, just list them)
+  tmp <directory...>                 List leftover temp files from an interrupted run
   reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
                                      Optional re-encode to fix sparse keyframes / VFR
   version                            Print the version

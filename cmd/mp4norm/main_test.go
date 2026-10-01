@@ -38,6 +38,12 @@ func TestReorderArgsInlineValue(t *testing.T) {
 	}
 }
 
+func TestRunTmpRequiresDirectory(t *testing.T) {
+	if err := runTmp(nil); err == nil {
+		t.Fatal("runTmp with no directory: want an error")
+	}
+}
+
 func TestRequireOneArgRejectsExtras(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	if err := fs.Parse([]string{"a.mp4", "b.mp4"}); err != nil {
