@@ -15,6 +15,9 @@ import {
   BatchNormalize,
   CancelBatch,
   SetLanguage,
+  ListBackups,
+  RestoreBackup,
+  DeleteBackups,
 } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { t, getLang, setLang, findingMessage } from './i18n';
@@ -35,6 +38,7 @@ const state = {
   outreenc: '',
   report: null,
   showReport: false,
+  gain: null,
   // Collapsible sections. Kept in memory only (no persistence): every launch
   // starts collapsed, but a re-render (e.g. language switch) must not re-close
   // a section the user just opened.
@@ -51,8 +55,21 @@ const state = {
   expanded: {}, // path -> bool
   scanning: false,
   outdir: '',
-  fileStatus: {}, // path -> { state, error, pct }
-  batch: { running: false, done: 0, skipped: 0, failed: 0, total: 0, finished: false, cancelled: false },
+  // Output mode is shared by the batch list and the single-file card:
+  // 'new' writes a new file, 'inplace' replaces originals after a backup.
+  outputMode: 'new',
+  backupDir: '',
+  fileStatus: {}, // path -> { state, error, pct, gain }
+  batch: {
+    running: false, done: 0, skipped: 0, failed: 0, total: 0,
+    finished: false, cancelled: false, beforeFirstPlay: 0, afterFirstPlay: 0,
+  },
+
+  // Backup management.
+  backupOpen: false,
+  backups: [], // []main.BackupEntry
+  backupResolvedDir: '',
+  backupConfirm: -1, // index into state.backups pending delete confirmation
 };
 
 const $ = (id) => document.getElementById(id);
@@ -103,6 +120,48 @@ const fmt = (report) => {
   return lines.join('\n');
 };
 
+// gainText renders the before/after container improvement exactly like the CLI
+// summary. A nil gain yields no lines so callers can skip it entirely.
+const gainText = (g) => {
+  if (!g) return '';
+  const lines = [t('gain.title')];
+  lines.push(
+    t('gain.firstplay', {
+      before: humanBytes(g.beforeFirstPlay),
+      after: humanBytes(g.afterFirstPlay),
+    }),
+  );
+  if (g.fragmented) lines.push(t('gain.segments', { after: g.afterMdat }));
+  else lines.push(t('gain.mdat', { before: g.beforeMdat, after: g.afterMdat }));
+  lines.push(t('gain.size', { before: humanBytes(g.beforeSize), after: humanBytes(g.afterSize) }));
+  return lines.join('\n');
+};
+
+// inplace is true when the shared output-mode choice is "replace originals".
+const inplace = () => state.outputMode === 'inplace';
+
+// backupDirDisplay names the in-place backup destination for the warning banner.
+const backupDirDisplay = () => state.backupDir || t('batch.inplace.defaultDir');
+
+// outputModeRadios is the shared new-file / replace-in-place picker. It appears
+// in both the batch card and the single-file card but edits one shared state.
+const outputModeRadios = (name) => `
+  <fieldset class="field output-mode">
+    <legend>${t('batch.mode.label')}</legend>
+    <label class="radio"><input type="radio" name="${name}" value="new"${
+      inplace() ? '' : ' checked'
+    } /> ${t('batch.mode.new')}</label>
+    <label class="radio"><input type="radio" name="${name}" value="inplace"${
+      inplace() ? ' checked' : ''
+    } /> ${t('batch.mode.inplace')}</label>
+    <span class="hint">${escapeHtml(t('batch.mode.hint'))}</span>
+  </fieldset>`;
+
+const inplaceWarning = () =>
+  `<div class="warning-banner" role="alert">${escapeHtml(
+    t('batch.inplace.warning', { dir: backupDirDisplay() }),
+  )}</div>`;
+
 // ---- Batch list helpers --------------------------------------------------
 
 const statusText = (status) => t(`status.${status}`);
@@ -122,7 +181,9 @@ const reasonText = (v) => {
 };
 
 const rawDetails = (v) => {
+  const st = state.fileStatus[v.path];
   const lines = [`${t('batch.detail.path')}: ${v.path}`];
+  if (st && st.gain) lines.push('', gainText(st.gain));
   if (!v.probe) {
     if (v.error) lines.push(`${t('batch.detail.rawError')}: ${v.error}`);
     return lines.join('\n');
@@ -140,7 +201,6 @@ const rawDetails = (v) => {
   }
   // A failed batch attempt keeps its raw error here so the reason column can
   // stay plain-language.
-  const st = state.fileStatus[v.path];
   if (st && st.error) lines.push(`${t('batch.detail.rawError')}: ${st.error}`);
   return lines.join('\n');
 };
@@ -285,6 +345,16 @@ const batchSection = () => {
          t('batch.progress', { done: b.done + b.failed, total: b.total }),
        )} ${escapeHtml(summary)}</div>`
     : '';
+  const gainSummary =
+    b.finished && !b.cancelled && b.done > 0 && b.beforeFirstPlay > 0
+      ? `<div class="muted batch-progress-text">${escapeHtml(
+          t('gain.summary', {
+            n: b.done,
+            before: humanBytes(b.beforeFirstPlay),
+            after: humanBytes(b.afterFirstPlay),
+          }),
+        )}</div>`
+      : '';
 
   return `
     <div class="row batch-toolbar">
@@ -313,6 +383,7 @@ const batchSection = () => {
       }
     </div>
     ${progress}
+    ${gainSummary}
     <table class="batch-table" id="batch-table">
       <colgroup>
         <col class="w-name" />
@@ -332,6 +403,84 @@ const batchSection = () => {
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
+};
+
+// backupSection renders the backup manager: a directory picker, the resolved
+// store path and one row per backup with restore / delete actions.
+const backupSection = () => {
+  const locale = getLang() === 'zh' ? 'zh-CN' : 'en-US';
+  const rows = state.backups
+    .map((e, i) => {
+      const confirming = state.backupConfirm === i;
+      const count = state.backups.filter((x) => x.original === e.original).length;
+      const stateLabel = e.originalExists ? t('backup.state.exists') : t('backup.state.missing');
+      const missing = e.backupExists
+        ? ''
+        : ` <span class="muted">(${t('backup.state.backupMissing')})</span>`;
+      const when = e.createdUnixMs ? new Date(e.createdUnixMs).toLocaleString(locale) : '';
+      const confirmHint = confirming
+        ? `<div class="muted backup-confirm-hint">${escapeHtml(
+            t('backup.deleteConfirm', { n: count }),
+          )}</div>`
+        : '';
+      return `
+        <tr>
+          <td class="col-name" title="${escapeAttr(e.original)}">${escapeHtml(e.original)}</td>
+          <td>${escapeHtml(e.backup)}${missing}</td>
+          <td class="col-size">${humanBytes(e.size)}</td>
+          <td class="col-time">${escapeHtml(when)}</td>
+          <td class="col-state">${escapeHtml(stateLabel)}</td>
+          <td class="col-actions">
+            <button type="button" class="btn ghost" data-backup-restore="${i}">${t('btn.restore')}</button>
+            <button type="button" class="btn ${
+              confirming ? 'primary' : 'ghost'
+            }" data-backup-delete="${i}">${
+              confirming ? t('btn.confirmDelete') : t('btn.deleteBackup')
+            }</button>
+            ${confirmHint}
+          </td>
+        </tr>`;
+    })
+    .join('');
+
+  const body = state.backups.length
+    ? `
+      <div class="muted backup-resolved">${escapeHtml(
+        t('backup.resolved', { dir: state.backupResolvedDir }),
+      )}</div>
+      <table class="backup-table">
+        <thead>
+          <tr>
+            <th>${t('backup.col.original')}</th>
+            <th>${t('backup.col.backup')}</th>
+            <th>${t('backup.col.size')}</th>
+            <th>${t('backup.col.time')}</th>
+            <th>${t('backup.col.state')}</th>
+            <th>${t('backup.col.actions')}</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`
+    : `<div class="muted backup-empty">${escapeHtml(t('backup.empty'))}</div>`;
+
+  return `
+    <details class="card" id="backup-card"${state.backupOpen ? ' open' : ''}>
+      <summary class="card-summary">
+        <h2>${t('backup.card')} <span class="sub muted">${t('backup.card.sub')}</span></h2>
+      </summary>
+      <div class="row">
+        <label class="field">
+          <span>${t('backup.dir')}</span>
+          <input id="backup-mgmt-dir" type="text" placeholder="${escapeAttr(
+            t('backup.dir.placeholder'),
+          )}" value="${escapeAttr(state.backupDir)}" />
+          <span class="hint">${escapeHtml(t('backup.dir.hint'))}</span>
+        </label>
+        <button id="choose-backup-mgmt-dir" class="btn ghost">${t('btn.chooseBackupDir')}</button>
+        <button id="list-backups" class="btn">${t('btn.listBackups')}</button>
+      </div>
+      ${body}
+    </details>`;
 };
 
 function render() {
@@ -360,9 +509,25 @@ function render() {
         <span>${t('batch.outdir')}</span>
         <input id="outdir" type="text" placeholder="${escapeAttr(
           t('batch.outdir.hint'),
-        )}" value="${escapeAttr(state.outdir)}" readonly />
+        )}" value="${escapeAttr(state.outdir)}" readonly ${inplace() ? 'disabled' : ''} />
       </label>
-      <button id="choose-outdir" class="btn ghost">${t('btn.chooseOutdir')}</button>
+      <button id="choose-outdir" class="btn ghost" ${inplace() ? 'disabled' : ''}>${t('btn.chooseOutdir')}</button>
+    </div>
+    <div class="row">
+      ${outputModeRadios('output-mode-batch')}
+    </div>
+    ${inplace() ? inplaceWarning() : ''}
+    <div class="row">
+      <label class="field">
+        <span>${t('batch.inplace.backupdir')}</span>
+        <input id="batch-backup-dir" type="text" placeholder="${escapeAttr(
+          t('batch.inplace.backupdir.hint'),
+        )}" value="${escapeAttr(state.backupDir)}" ${inplace() ? '' : 'disabled'} />
+        <span class="hint">${escapeHtml(t('batch.inplace.backupdir.hint'))}</span>
+      </label>
+      <button id="choose-batch-backup-dir" class="btn ghost" ${
+        inplace() ? '' : 'disabled'
+      }>${t('btn.chooseBackupDir')}</button>
     </div>
     ${batchSection()}
   </section>
@@ -383,6 +548,7 @@ function render() {
 
   <section class="card" id="report-card" ${state.showReport ? '' : 'hidden'}>
     <h2>${t('card.diagnosis')}</h2>
+    ${state.gain ? `<pre class="gain">${escapeHtml(gainText(state.gain))}</pre>` : ''}
     <pre id="report">${escapeHtml(state.report ? fmt(state.report) : '')}</pre>
   </section>
 
@@ -403,12 +569,16 @@ function render() {
         <span>${t('label.output')}</span>
         <input id="outnorm" type="text" placeholder="${escapeAttr(
           t('out.norm.placeholder'),
-        )}" value="${escapeAttr(state.outnorm)}" readonly />
+        )}" value="${escapeAttr(state.outnorm)}" readonly ${inplace() ? 'disabled' : ''} />
         <span class="hint">${escapeHtml(t('hint.output.norm'))}</span>
       </label>
-      <button id="savenorm" class="btn ghost">${t('btn.saveas')}</button>
+      <button id="savenorm" class="btn ghost" ${inplace() ? 'disabled' : ''}>${t('btn.saveas')}</button>
       <button id="normalize" class="btn primary">${t('btn.normalize')}</button>
     </div>
+    <div class="row">
+      ${outputModeRadios('output-mode-single')}
+    </div>
+    ${inplace() ? inplaceWarning() : ''}
     <details class="advanced" id="advanced-norm"${state.normAdvanced ? ' open' : ''}>
       <summary>${t('advanced.norm')}</summary>
       <div class="row">
@@ -486,6 +656,8 @@ function render() {
     <progress id="progress" max="1" value="0"></progress>
   </details>
 
+  ${backupSection()}
+
   <section class="card">
     <h2>${t('card.log')}</h2>
     <pre id="log" class="log">${escapeHtml(state.logs.length ? state.logs.join('\n') + '\n' : '')}</pre>
@@ -508,6 +680,18 @@ function bindEvents() {
   if (adv) adv.ontoggle = () => { state.normAdvanced = adv.open; };
   const re = $('reencode-card');
   if (re) re.ontoggle = () => { state.reencodeOpen = re.open; };
+  const bk = $('backup-card');
+  if (bk) bk.ontoggle = () => { state.backupOpen = bk.open; };
+
+  // The output-mode radios appear in both cards but edit one shared state.
+  document
+    .querySelectorAll('input[name="output-mode-batch"], input[name="output-mode-single"]')
+    .forEach((el) => {
+      el.onchange = () => {
+        state.outputMode = el.value;
+        render();
+      };
+    });
 
   // ---- Batch list --------------------------------------------------------
   const cf = $('choose-files');
@@ -528,7 +712,17 @@ function bindEvents() {
     state.expanded = {};
     state.filter = 'all';
     state.sortBySize = false;
-    state.batch = { running: false, done: 0, skipped: 0, failed: 0, total: 0, finished: false, cancelled: false };
+    state.batch = {
+      running: false,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      total: 0,
+      finished: false,
+      cancelled: false,
+      beforeFirstPlay: 0,
+      afterFirstPlay: 0,
+    };
     render();
     log(t('log.cleared'));
   };
@@ -566,12 +760,48 @@ function bindEvents() {
     };
   }
 
+  // ---- Backup manager ----------------------------------------------------
+  const chooseBackupFt = async () => {
+    const dir = await ChooseOutputDir();
+    if (dir) {
+      state.backupDir = dir;
+      render();
+    }
+  };
+  const cbb = $('choose-batch-backup-dir');
+  if (cbb) cbb.onclick = chooseBackupFt;
+  const cbm = $('choose-backup-mgmt-dir');
+  if (cbm) cbm.onclick = chooseBackupFt;
+  const lb = $('list-backups');
+  if (lb) lb.onclick = () => refreshBackups();
+
+  const btable = document.querySelector('.backup-table');
+  if (btable) {
+    btable.onclick = (e) => {
+      const restoreBtn = e.target.closest('button[data-backup-restore]');
+      if (restoreBtn) {
+        restoreBackupAt(Number(restoreBtn.dataset.backupRestore));
+        return;
+      }
+      const delBtn = e.target.closest('button[data-backup-delete]');
+      if (delBtn) {
+        deleteBackupAt(Number(delBtn.dataset.backupDelete));
+        return;
+      }
+      if (state.backupConfirm !== -1) {
+        state.backupConfirm = -1;
+        render();
+      }
+    };
+  }
+
   $('choose').onclick = async () => {
     const path = await ChooseInput();
     if (!path) return;
     state.input = path;
     state.outnorm = '';
     state.outreenc = '';
+    state.gain = null;
     render();
     log(t('log.selected', { path }));
   };
@@ -580,6 +810,7 @@ function bindEvents() {
     if (!state.input) return log(t('log.noFile'));
     try {
       state.report = await Probe(state.input);
+      state.gain = null;
       state.showReport = true;
       render();
       log(t('log.inspected'));
@@ -609,6 +840,8 @@ function bindEvents() {
   mirror('vcodec', 'vcodec');
   mirror('hw', 'hw');
   mirror('preset', 'preset');
+  mirror('batch-backup-dir', 'backupDir');
+  mirror('backup-mgmt-dir', 'backupDir');
 
   $('savenorm').onclick = async () => {
     const p = await ChooseOutput('output.mp4');
@@ -632,10 +865,12 @@ function bindEvents() {
     try {
       const res = await Normalize({
         input: state.input,
-        output: state.outnorm,
+        output: inplace() ? '' : state.outnorm,
         format: state.format,
         windowMs: Number(state.window),
         fragmentMs: Number(state.frag),
+        inPlace: inplace(),
+        backupDir: inplace() ? state.backupDir : '',
       });
       showResult(res);
     } catch (e) {
@@ -703,6 +938,9 @@ async function refreshAfterBatch(res) {
   for (const o of res.results || []) {
     if (o.status === 'failed') status[o.path] = { state: 'failed', error: o.error };
     else if (o.status === 'skipped') status[o.path] = { state: 'skipped' };
+    // Successful rows are keyed by their (possibly new) output path and keep
+    // the before/after gain so the detail block can show the numbers.
+    else if (o.status === 'done') status[o.output || o.path] = { state: 'done', gain: o.gain };
   }
   state.fileStatus = status;
 }
@@ -719,7 +957,17 @@ async function scanPaths(paths) {
     state.fileStatus = {};
     state.expanded = {};
     state.scanning = false;
-    state.batch = { running: false, done: 0, skipped: 0, failed: 0, total: 0, finished: false, cancelled: false };
+    state.batch = {
+      running: false,
+      done: 0,
+      skipped: 0,
+      failed: 0,
+      total: 0,
+      finished: false,
+      cancelled: false,
+      beforeFirstPlay: 0,
+      afterFirstPlay: 0,
+    };
     const ok = state.files.filter((v) => v.status === 'ok').length;
     const needs = state.files.filter((v) => v.status === 'needs_work').length;
     const broken = state.files.filter((v) => v.status === 'broken').length;
@@ -745,6 +993,8 @@ async function startBatch() {
     total: targets.length,
     finished: false,
     cancelled: false,
+    beforeFirstPlay: 0,
+    afterFirstPlay: 0,
   };
   render();
   log(t('log.batchStart', { n: targets.length }));
@@ -753,10 +1003,12 @@ async function startBatch() {
   try {
     res = await BatchNormalize({
       inputs: targets.map((v) => v.path),
-      outdir: state.outdir,
+      outdir: inplace() ? '' : state.outdir,
       format: state.format,
       windowMs: Number(state.window),
       fragmentMs: Number(state.frag),
+      inPlace: inplace(),
+      backupDir: inplace() ? state.backupDir : '',
     });
   } catch (e) {
     state.batch.running = false;
@@ -770,7 +1022,7 @@ async function startBatch() {
   const done = new Set();
   for (const o of res.results || []) {
     done.add(o.path);
-    state.fileStatus[o.path] = { state: o.status, error: o.error };
+    state.fileStatus[o.output || o.path] = { state: o.status, error: o.error, gain: o.gain };
   }
   for (const v of targets) {
     if (!done.has(v.path)) state.fileStatus[v.path] = { state: 'skipped' };
@@ -781,6 +1033,8 @@ async function startBatch() {
   state.batch.done = res.done || 0;
   state.batch.failed = res.failed || 0;
   state.batch.skipped = res.skipped || 0;
+  state.batch.beforeFirstPlay = res.beforeFirstPlay || 0;
+  state.batch.afterFirstPlay = res.afterFirstPlay || 0;
   log(
     res.cancelled
       ? t('log.batchCancelled')
@@ -791,8 +1045,59 @@ async function startBatch() {
   render();
 }
 
+// ---- Backup manager actions ---------------------------------------------
+
+// refreshBackups lists the backups for the chosen directory and re-renders.
+async function refreshBackups() {
+  if (!state.backupDir) return log(t('backup.empty'));
+  try {
+    const list = await ListBackups(state.backupDir);
+    state.backups = (list && list.entries) || [];
+    state.backupResolvedDir = (list && list.dir) || '';
+    state.backupConfirm = -1;
+    render();
+    log(t('log.backupListed', { n: state.backups.length }));
+  } catch (e) {
+    log(t('backup.failed', { err: e }));
+  }
+}
+
+async function restoreBackupAt(i) {
+  const e = state.backups[i];
+  if (!e) return;
+  try {
+    const out = await RestoreBackup(state.backupDir, e.original);
+    log(t('backup.restored', { path: e.original }));
+    if (out && out.replacedBackup) log(t('backup.restoreNote', { name: out.replacedBackup }));
+  } catch (err) {
+    log(t('backup.failed', { err }));
+  }
+  await refreshBackups();
+}
+
+// deleteBackupAt is two-step: the first click arms the row, the second deletes
+// every backup of that original (forget), matching the CLI's semantics.
+async function deleteBackupAt(i) {
+  const e = state.backups[i];
+  if (!e) return;
+  if (state.backupConfirm !== i) {
+    state.backupConfirm = i;
+    render();
+    return;
+  }
+  try {
+    const n = await DeleteBackups(state.backupDir, e.original);
+    log(t('backup.deleted', { n }));
+  } catch (err) {
+    log(t('backup.failed', { err }));
+  }
+  state.backupConfirm = -1;
+  await refreshBackups();
+}
+
 const showResult = (res) => {
   state.report = res.report || res.Report;
+  state.gain = res.gain || res.Gain || null;
   state.showReport = true;
   render();
   log(t('log.done', { path: res.output || res.Output }));

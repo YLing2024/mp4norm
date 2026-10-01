@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Eyevinn/mp4ff/mp4"
 )
 
 func mkBox(typ string, payload []byte) []byte {
@@ -26,6 +30,198 @@ func writeFile(t *testing.T, path string, parts ...[]byte) {
 	}
 	if err := os.WriteFile(path, buf, 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// buildProgressive builds a minimal, valid progressive MP4 with one video
+// sample. When moovAtEnd is true the mdat precedes the moov, so the file needs
+// (and is a candidate for) normalization.
+func buildProgressive(t *testing.T, moovAtEnd bool) []byte {
+	t.Helper()
+
+	ftyp := mp4.NewFtyp("isom", 0x200, []string{"isom", "mp42"})
+	moov := mp4.NewMoovBox()
+	moov.AddChild(mp4.CreateMvhd())
+
+	trak := mp4.CreateEmptyTrak(1, 90000, "vide", "und")
+	stbl := trak.Mdia.Minf.Stbl
+	stbl.Stts.SampleCount = []uint32{1}
+	stbl.Stts.SampleTimeDelta = []uint32{3000}
+	stbl.Stsc.Entries = []mp4.StscEntry{{FirstChunk: 1, SamplesPerChunk: 1}}
+	stbl.Stsc.SampleDescriptionID = []uint32{1}
+	stbl.Stsz.SampleNumber = 1
+	stbl.Stsz.SampleSize = []uint32{4}
+	stbl.Stco.ChunkOffset = []uint32{0}
+	moov.AddChild(trak)
+	moov.Trak = trak
+	moov.Traks = []*mp4.TrakBox{trak}
+
+	mdat := &mp4.MdatBox{}
+	mdat.SetData([]byte("abcd"))
+
+	f := mp4.NewFile()
+	f.Ftyp = ftyp
+	f.Moov = moov
+	f.Mdat = mdat
+	if moovAtEnd {
+		f.Children = []mp4.Box{ftyp, mdat, moov}
+	} else {
+		f.Children = []mp4.Box{ftyp, moov, mdat}
+	}
+	var buf bytes.Buffer
+	if err := f.Encode(&buf); err != nil {
+		t.Fatalf("encode synthetic file: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func sha256Of(t *testing.T, path string) [32]byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return sha256.Sum256(b)
+}
+
+func TestBuildSpecValidatesOutputMode(t *testing.T) {
+	if _, err := buildSpec("normalize", "in.mp4", "out.mp4", ".norm.mp4", true, ""); err == nil {
+		t.Fatal("in-place with an output path: want an error")
+	}
+	if _, err := buildSpec("normalize", "in.mp4", "", ".norm.mp4", false, "bk"); err == nil {
+		t.Fatal("backup dir without in-place: want an error")
+	}
+	spec, err := buildSpec("normalize", "in.mp4", "", ".norm.mp4", false, "")
+	if err != nil {
+		t.Fatalf("buildSpec: %v", err)
+	}
+	if spec.inPlace || spec.output != "in.norm.mp4" {
+		t.Fatalf("spec = %+v, want new-file output in.norm.mp4", spec)
+	}
+}
+
+func TestNormalizeInPlaceCreatesBackupWithGain(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+	original := sha256Of(t, in)
+
+	app := NewApp()
+	res, err := app.Normalize(NormalizeRequest{Input: in, Format: "progressive", WindowMs: 1000, InPlace: true})
+	if err != nil {
+		t.Fatalf("Normalize in-place: %v", err)
+	}
+	if !res.InPlace || res.BackupPath == "" {
+		t.Fatalf("result = %+v, want an in-place run with a backup path", res)
+	}
+	if res.Gain == nil || res.Gain.BeforeFirstPlay == 0 {
+		t.Fatalf("gain = %+v, want before/after numbers", res.Gain)
+	}
+
+	// The original is now at the backup path, byte-for-byte.
+	if got := sha256Of(t, res.BackupPath); got != original {
+		t.Fatal("backup does not match the original bytes")
+	}
+	// The published file leads with moov (faststart), so it differs from source.
+	if after := sha256Of(t, in); after == original {
+		t.Fatal("input was not replaced")
+	}
+	if rep, err := app.Probe(in); err != nil || rep.MoovPosition != "front" {
+		t.Fatalf("normalized moov position = %v (err %v), want front", rep, err)
+	}
+}
+
+func TestNormalizeNewFileLeavesInputUntouched(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+	original := sha256Of(t, in)
+
+	app := NewApp()
+	res, err := app.Normalize(NormalizeRequest{Input: in, Format: "progressive", WindowMs: 1000})
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if res.InPlace || res.BackupPath != "" {
+		t.Fatalf("result = %+v, want a plain new-file run", res)
+	}
+	if res.Output != filepath.Join(dir, "clip.norm.mp4") {
+		t.Fatalf("output = %q, want clip.norm.mp4 beside the input", res.Output)
+	}
+	if got := sha256Of(t, in); got != original {
+		t.Fatal("input changed in new-file mode")
+	}
+	if _, err := os.Stat(res.Output); err != nil {
+		t.Fatalf("output missing: %v", err)
+	}
+}
+
+func TestBatchNormalizeInPlaceAggregatesGain(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.mp4")
+	b := filepath.Join(dir, "b.mp4")
+	writeFile(t, a, buildProgressive(t, true))
+	writeFile(t, b, buildProgressive(t, true))
+
+	app := NewApp()
+	res, err := app.BatchNormalize(BatchRequest{
+		Inputs: []string{a, b}, Format: "progressive", WindowMs: 1000, InPlace: true,
+	})
+	if err != nil {
+		t.Fatalf("BatchNormalize: %v", err)
+	}
+	if res.Done != 2 || res.Failed != 0 {
+		t.Fatalf("result = %+v, want 2 done / 0 failed", res)
+	}
+	if res.BeforeFirstPlay == 0 || res.AfterFirstPlay == 0 {
+		t.Fatalf("aggregate gain = (%d -> %d), want both non-zero", res.BeforeFirstPlay, res.AfterFirstPlay)
+	}
+	for _, o := range res.Results {
+		if o.Gain == nil || o.BackupPath == "" {
+			t.Fatalf("outcome = %+v, want gain and backup path", o)
+		}
+	}
+}
+
+func TestBackupManagementListRestoreDelete(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+	original := sha256Of(t, in)
+
+	app := NewApp()
+	if _, err := app.Normalize(NormalizeRequest{Input: in, Format: "progressive", WindowMs: 1000, InPlace: true}); err != nil {
+		t.Fatalf("in-place normalize: %v", err)
+	}
+
+	list, err := app.ListBackups(dir)
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	if len(list.Entries) != 1 || list.Entries[0].Original != in || !list.Entries[0].OriginalExists {
+		t.Fatalf("entries = %+v, want one entry for %s", list.Entries, in)
+	}
+
+	out, err := app.RestoreBackup(dir, in)
+	if err != nil {
+		t.Fatalf("RestoreBackup: %v", err)
+	}
+	if out.Restored.Backup == "" || out.ReplacedBackup == "" {
+		t.Fatalf("restore outcome = %+v, want both the restored and replaced backups", out)
+	}
+	if got := sha256Of(t, in); got != original {
+		t.Fatal("restore did not bring the original bytes back")
+	}
+
+	if n, err := app.DeleteBackups(dir, in); err != nil || n != 1 {
+		t.Fatalf("DeleteBackups = (%d, %v), want (1, nil)", n, err)
+	}
+	list, err = app.ListBackups(dir)
+	if err != nil {
+		t.Fatalf("ListBackups after delete: %v", err)
+	}
+	if len(list.Entries) != 0 {
+		t.Fatalf("entries after delete = %+v, want none", list.Entries)
 	}
 }
 
