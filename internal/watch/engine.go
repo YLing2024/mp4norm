@@ -92,7 +92,11 @@ func (r *Runner) Pass() Summary {
 		}
 		switch r.State.Observe(path, cur) {
 		case DecisionFirstSeen:
-			// Observe one pass before trusting the file.
+			// A brand-new file is not yet known to have finished being
+			// written. Report it as writing and defer classification to a
+			// later pass, so a half-written download is never judged.
+			s.Writing++
+			r.log("watching %s: first observation, will settle next pass", path)
 			continue
 		case DecisionWriting:
 			s.Writing++

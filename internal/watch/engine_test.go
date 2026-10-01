@@ -77,6 +77,42 @@ func TestRunOnceProcessesStableNeedsWork(t *testing.T) {
 	}
 }
 
+func TestFirstPassIsBaselineAndNeverFails(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "bad.mp4", "B") // would classify as broken if inspected
+
+	proc := &fakeProc{}
+	r := newRunner(dir, proc.run)
+	s := r.Pass()
+
+	if s.Writing != 1 || s.Failed != 0 || s.Processed != 0 {
+		t.Fatalf("baseline pass writing=%d failed=%d processed=%d, want 1/0/0", s.Writing, s.Failed, s.Processed)
+	}
+	if len(proc.processed) != 0 {
+		t.Fatalf("baseline pass processed %v, want none", proc.processed)
+	}
+}
+
+func TestGrowingBrokenFileIsWritingNotFailed(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "bad.mp4", "B")
+
+	proc := &fakeProc{}
+	r := newRunner(dir, proc.run)
+	r.Pass() // baseline observation
+
+	if err := os.WriteFile(p, []byte("B plus more"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.Pass(); s.Writing != 1 || s.Failed != 0 {
+		t.Fatalf("changed pass writing=%d failed=%d, want 1/0", s.Writing, s.Failed)
+	}
+	// Only once the file settles is the broken verdict allowed to stick.
+	if s := r.Pass(); s.Failed != 1 {
+		t.Fatalf("settled broken pass failed=%d, want 1", s.Failed)
+	}
+}
+
 func TestPassSkipsFileThatIsStillBeingWritten(t *testing.T) {
 	dir := t.TempDir()
 	p := writeFile(t, dir, "w.mp4", "start")
@@ -92,11 +128,11 @@ func TestPassSkipsFileThatIsStillBeingWritten(t *testing.T) {
 	}
 	s := r.Pass() // changed since last pass
 
-	if s.Writing != 1 || s.Processed != 0 {
-		t.Fatalf("writing=%d processed=%d, want 1/0", s.Writing, s.Processed)
+	if s.Writing != 1 || s.Processed != 0 || s.Failed != 0 {
+		t.Fatalf("writing=%d processed=%d failed=%d, want 1/0/0", s.Writing, s.Processed, s.Failed)
 	}
-	if len(logs) != 1 || !strings.Contains(logs[0], "still being written") {
-		t.Fatalf("logs = %v, want one 'still being written' note", logs)
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "still being written") {
+		t.Fatalf("logs = %v, want a 'still being written' note", logs)
 	}
 	// Once writing stops, the next pass processes it.
 	s = r.Pass()
