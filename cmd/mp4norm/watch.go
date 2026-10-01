@@ -23,15 +23,13 @@ const minWatchInterval = 30 * time.Second
 // beside its input.
 const watchSuffix = ".norm.mp4"
 
-// watchSettleDelay is the gap between the observation pass and the processing
-// pass of a -once run. Two observations separated by this delay make the
-// still-being-written check meaningful even when the writer is slow.
-const watchSettleDelay = time.Second
-
 // runWatch implements `mp4norm watch`: it polls the given directories, waits
 // until each file has stopped being written, and normalizes the ones that need
-// work. With -once it performs a single observation+processing round and exits
-// with scan-style codes (0 all clean / 1 something processed / 2 an error).
+// work. The first round over a folder is a baseline observation pass: every
+// file is recorded and left alone so a file that is still being written is not
+// mistaken for a finished one. With -once it performs a single observation
+// round and exits with scan-style codes (0 all clean / 1 something processed /
+// 2 an error); run it twice to observe then process.
 func runWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	interval := fs.Duration("interval", 5*time.Minute, "poll interval (minimum 30s)")
@@ -130,20 +128,9 @@ func runWatch(args []string) error {
 	}
 
 	if *once {
-		// Prime each root with a silent observation pass, then run the real
-		// round, so a folder watch has never seen is handled in one invocation
-		// while a file that is still being appended fails the stability check.
-		for i := range targets {
-			r := &watch.Runner{
-				Root:     targets[i].root,
-				State:    targets[i].state,
-				Classify: classify.ClassifyFile,
-				Process:  process,
-				Quiet:    *quiet,
-			}
-			r.Observe()
-		}
-		time.Sleep(watchSettleDelay)
+		// A single round is a pure observation pass. Every file seen for
+		// the first time is recorded as writing and skipped; a second run
+		// settles the file and only then classifies and processes it.
 		total, err := runRound()
 		if err != nil {
 			return err

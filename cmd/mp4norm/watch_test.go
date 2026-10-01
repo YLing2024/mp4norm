@@ -47,6 +47,32 @@ func TestWatchRequiresDirectoryArg(t *testing.T) {
 	}
 }
 
+func TestWatchOnceFirstRoundIsBaseline(t *testing.T) {
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(clip, make([]byte, 20000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A freshly seen file is only observed: nothing is processed and, even
+	// though it is not a valid MP4 yet, it is not recorded as failed.
+	if err := runWatch([]string{"-once", "-quiet", dir}); err != nil {
+		t.Fatalf("first -once round on a new file: %v", err)
+	}
+	// The file changes (as a download would): still just writing.
+	if err := os.WriteFile(clip, make([]byte, 59976), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runWatch([]string{"-once", "-quiet", dir}); err != nil {
+		t.Fatalf("second -once round on a growing file: %v", err)
+	}
+	// Once it settles, the broken verdict is allowed to stick (exit code 2).
+	err := runWatch([]string{"-once", "-quiet", dir})
+	ec, ok := err.(exitCodeError)
+	if !ok || ec.code != 2 {
+		t.Fatalf("settled -once round error = %v, want exit code 2", err)
+	}
+}
+
 func TestWatchExitCode(t *testing.T) {
 	cases := []struct {
 		s    watch.Summary

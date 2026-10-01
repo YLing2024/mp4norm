@@ -54,15 +54,20 @@ func newRunner(root string, proc Processor) *Runner {
 	}
 }
 
-func TestRunOnceProcessesStableNeedsWork(t *testing.T) {
+func TestBaselineThenProcessStableNeedsWork(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.mp4", "A")
 	writeFile(t, dir, "ok.mp4", "O")
 	writeFile(t, dir, "bad.mp4", "B")
 
 	proc := &fakeProc{}
-	s := newRunner(dir, proc.run).RunOnce()
+	r := newRunner(dir, proc.run)
 
+	// The first pass only observes: everything is reported as writing.
+	if s := r.Pass(); s.Writing != 3 || s.Processed != 0 || s.Failed != 0 {
+		t.Fatalf("baseline pass writing=%d processed=%d failed=%d, want 3/0/0", s.Writing, s.Processed, s.Failed)
+	}
+	s := r.Pass()
 	if s.Processed != 1 || s.NeedsWork != 1 {
 		t.Fatalf("processed=%d needsWork=%d, want 1/1", s.Processed, s.NeedsWork)
 	}
@@ -196,7 +201,8 @@ func TestStateMakesSecondRunIdempotent(t *testing.T) {
 
 	r1 := newRunner(dir, proc)
 	r1.State, _ = LoadState(statePath)
-	if s := r1.RunOnce(); s.Processed != 1 {
+	r1.Pass() // baseline observation
+	if s := r1.Pass(); s.Processed != 1 {
 		t.Fatalf("first run processed=%d, want 1", s.Processed)
 	}
 	if err := r1.State.Save(statePath); err != nil {
@@ -205,7 +211,7 @@ func TestStateMakesSecondRunIdempotent(t *testing.T) {
 
 	r2 := newRunner(dir, proc)
 	r2.State, _ = LoadState(statePath)
-	s := r2.RunOnce()
+	s := r2.Pass()
 	if s.NeedsWork != 0 || s.Processed != 0 {
 		t.Fatalf("second run needsWork=%d processed=%d, want 0/0", s.NeedsWork, s.Processed)
 	}
@@ -226,7 +232,8 @@ func TestCorruptStateStillProcessesWithWarning(t *testing.T) {
 	}
 	r := newRunner(dir, (&fakeProc{}).run)
 	r.State = st
-	if s := r.RunOnce(); s.Processed != 1 {
+	r.Pass() // baseline observation
+	if s := r.Pass(); s.Processed != 1 {
 		t.Fatalf("processed=%d after corrupt state, want 1", s.Processed)
 	}
 }

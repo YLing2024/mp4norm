@@ -20,8 +20,8 @@ type Classifier func(path string) classify.Verdict
 type Processor func(path string) (output string, err error)
 
 // Runner scans a single directory, decides which files are safe to process and
-// normalizes them once. It owns no concurrency: the caller drives Pass or
-// RunOnce.
+// normalizes them once. It owns no concurrency: the caller drives repeated
+// Pass calls (the first is a baseline observation pass).
 type Runner struct {
 	// Root is the directory being watched.
 	Root string
@@ -135,30 +135,6 @@ func (r *Runner) Pass() Summary {
 		}
 	}
 	return s
-}
-
-// RunOnce is the body of `watch -once`: a silent observation pass records
-// first sightings, then a full pass processes the files that are now known to
-// be settled. The extra pass is what lets a single invocation handle a folder
-// that watch has never seen, while a file that is still being appended changes
-// between the two passes and is skipped.
-func (r *Runner) RunOnce() Summary {
-	r.Observe()
-	return r.Pass()
-}
-
-// Observe updates the recorded (size, mtime) for every candidate without
-// classifying, processing or logging. It primes the first pass of a -once run
-// so a folder watch has never seen can be handled in one invocation.
-func (r *Runner) Observe() {
-	files, _ := Collect(r.Root)
-	for _, path := range files {
-		cur, err := Stat(path)
-		if err != nil {
-			continue
-		}
-		r.State.Observe(path, cur)
-	}
 }
 
 // Collect lists the media candidates under root, newest scan last. Directories
