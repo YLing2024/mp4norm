@@ -61,17 +61,40 @@ mp4norm reencode -crf 23 <input>     # 可选重编码（修关键帧稀疏 / VF
 
 常用 flag：`-o <out>` 输出路径、`-window <ms>` 交织窗口、`-frag-ms <ms>` 分片时长、`-vcodec h264|h265|copy`、`-hw auto|on|off`、`-gop <sec>` 关键帧间隔。
 
+批量检测（推荐入口）—— 扫描一个文件夹，直接告诉你**每个文件要不要处理**：
+
+```
+mp4norm scan <目录|文件...>        # 人话表格：需要处理 / 无法处理 / 无需处理
+mp4norm scan <目录> --needs-work   # 只列出需要处理的（脚本化用）
+mp4norm scan <目录> --json         # 机器可读
+mp4norm scan <目录> -v             # 附带原始字段（brand / moov 位置 / mdat 块数）
+```
+
+结论只有三种：
+
+- ✅ **无需处理** —— 索引已在文件开头、数据块完整、没有异常
+- ⚠️ **建议规整** —— 索引在文件尾部，或数据碎片化（数据块过多），或音视频未交织
+- ❌ **无法处理** —— 缺少索引或文件损坏
+
+退出码：`0` 全部无需处理 / `1` 存在建议规整 / `2` 存在无法处理，方便脚本化。
+
 `batch` 可以并行处理多个文件或目录：
 
 ```
 mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
 ```
 
-桌面 GUI（Wails）：
+桌面 GUI（Wails）—— **批量检测与批量规整是主要入口**：
 
 ```
-cd gui && wails build     # 产物在 build/bin/mp4norm
+cd gui && wails build                          # 产物在 build/bin/mp4norm
+./build/bin/mp4norm.exe "D:\你的视频目录"       # 也可直接带目录/文件启动，自动检测
 ```
+
+- 「选择文件夹…」或「选择文件…」（支持多选）→ 列表逐行给出**结论与原因**，可按结论筛选、按大小排序
+- 「批量规整」一键处理所有需要处理的文件，实时显示每个文件状态与整体进度，结束给出成功 / 跳过 / 失败汇总；完成后结论与按钮计数自动刷新
+- 原始字段（brand / moov 位置 / mdat 块数）收在每行的「详情」里，不再糊在主界面
+- 单文件流程（选择单个文件 → 检查 → 规整 / 重新编码）仍然保留
 
 ### 界面语言（GUI 双语）
 

@@ -61,17 +61,41 @@ Common flags: `-o <out>` output path, `-window <ms>` interleave window,
 `-frag-ms <ms>` fragment duration, `-vcodec h264|h265|copy`, `-hw auto|on|off`,
 `-gop <sec>` keyframe interval.
 
+Batch detection (the recommended entry point) — scan a folder and get a
+plain-language verdict per file:
+
+```
+mp4norm scan <dir|file...>         # human-readable table
+mp4norm scan <dir> --needs-work    # only the files that need work
+mp4norm scan <dir> --json          # machine-readable
+mp4norm scan <dir> -v              # include raw fields (brand / moov position / mdat boxes)
+```
+
+Three verdicts only:
+
+- ✅ **no work needed** — index at the front, data blocks intact, nothing odd
+- ⚠️ **needs work** — index at the end, fragmented into many data blocks, or audio/video not interleaved
+- ❌ **cannot process** — missing index or corrupt file
+
+Exit codes: `0` nothing to do / `1` some files need work / `2` some files are broken — convenient for scripting.
+
 `batch` normalizes many files or directories in parallel:
 
 ```
 mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
 ```
 
-Desktop GUI (Wails):
+Desktop GUI (Wails) — **batch detection and normalization are the main entry point**:
 
 ```
-cd gui && wails build     # produces build/bin/mp4norm
+cd gui && wails build                        # produces build/bin/mp4norm
+./build/bin/mp4norm.exe "D:\your\video\dir"  # or pass dirs/files on the command line
 ```
+
+- "Choose folder…" or "Choose files…" (multi-select) → the list shows a **verdict and reason per file**, filterable by verdict and sortable by size
+- "Batch normalize" processes every file that needs work, showing per-file status and overall progress, ending with an ok / skipped / failed summary; verdicts and the button count refresh afterwards
+- Raw fields (brand / moov position / mdat boxes) live in each row's details instead of the main view
+- The single-file flow (pick one file → inspect → normalize / re-encode) is still there
 
 ### GUI language (bilingual)
 
