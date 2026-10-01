@@ -34,6 +34,11 @@ type App struct {
 	// progress so CancelBatch can stop it.
 	batchMu     sync.Mutex
 	batchCancel context.CancelFunc
+
+	// tmpMu guards tmpPath, the temp file of the rewrite currently in flight
+	// (reported through safefile.Request.TrackTemp) so shutdown can remove it.
+	tmpMu   sync.Mutex
+	tmpPath string
 }
 
 // NewApp creates a new App. Any initialTargets are the file/directory paths
@@ -95,6 +100,35 @@ func (a *App) InitialTargets() []string {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+}
+
+// shutdown runs when the window closes. It stops any running batch and removes
+// the temp file of a rewrite still in flight, so closing the window does not
+// strand residue. A temp file already renamed into place is left untouched.
+func (a *App) shutdown(context.Context) {
+	a.CancelBatch()
+	a.tmpMu.Lock()
+	path := a.tmpPath
+	a.tmpPath = ""
+	a.tmpMu.Unlock()
+	if path != "" {
+		os.Remove(path)
+	}
+}
+
+// trackTemp implements safefile.Request.TrackTemp for the GUI.
+func (a *App) trackTemp(path string) {
+	a.tmpMu.Lock()
+	a.tmpPath = path
+	a.tmpMu.Unlock()
+}
+
+// cleanupLog reports stale-temp cleanup through the Wails logger. Before the
+// runtime is ready the note is dropped, which is harmless.
+func (a *App) cleanupLog(format string, args ...any) {
+	if a.ctx != nil {
+		runtime.LogPrintf(a.ctx, format, args...)
+	}
 }
 
 // SetLanguage selects the language used for native dialogs. It accepts "zh"
@@ -386,6 +420,8 @@ func (a *App) BatchNormalize(req BatchRequest) (*BatchResult, error) {
 			BackupDir:  req.BackupDir,
 			Fragmented: fragmented,
 			Transform:  fn,
+			Logf:       a.cleanupLog,
+			TrackTemp:  a.trackTemp,
 		})
 		if err != nil {
 			res.Failed++
@@ -602,6 +638,8 @@ func (a *App) transform(spec transformSpec, fn func(normalize.ReadSeekerAt, io.W
 		BackupDir:  spec.backupDir,
 		Fragmented: fragmented,
 		Transform:  fn,
+		Logf:       a.cleanupLog,
+		TrackTemp:  a.trackTemp,
 	})
 	if err != nil {
 		return nil, err

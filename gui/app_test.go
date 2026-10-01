@@ -2,13 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Eyevinn/mp4ff/mp4"
+
+	"github.com/YLing2024/mp4norm/internal/safefile"
 )
 
 func mkBox(typ string, payload []byte) []byte {
@@ -153,6 +158,68 @@ func TestNormalizeNewFileLeavesInputUntouched(t *testing.T) {
 	}
 	if _, err := os.Stat(res.Output); err != nil {
 		t.Fatalf("output missing: %v", err)
+	}
+}
+
+// TestNormalizeSweepsAndClearsTempTracking checks the GUI rewrite path end to
+// end: stale residue is swept before the rewrite, the in-flight tracking is
+// cleared afterwards, and no temp file of any kind is left behind.
+func TestNormalizeSweepsAndClearsTempTracking(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+
+	stale := filepath.Join(dir, safefile.TempPrefix+"residue")
+	if err := os.WriteFile(stale, []byte("residue"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	if _, err := app.Normalize(NormalizeRequest{Input: in, Format: "progressive", WindowMs: 1000}); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale residue survived the rewrite: %v", err)
+	}
+	app.tmpMu.Lock()
+	tracked := app.tmpPath
+	app.tmpMu.Unlock()
+	if tracked != "" {
+		t.Fatalf("temp tracking not cleared after Normalize: %q", tracked)
+	}
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, de := range des {
+		if strings.HasPrefix(de.Name(), safefile.TempPrefix) {
+			t.Fatalf("temp file left behind: %s", de.Name())
+		}
+	}
+}
+
+// TestShutdownRemovesTrackedTempFile covers the graceful-close path: a temp
+// file of a rewrite still in flight is deleted and the tracking is reset.
+func TestShutdownRemovesTrackedTempFile(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, safefile.TempPrefix+"inflight")
+	if err := os.WriteFile(tmp, []byte("residue"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	app.trackTemp(tmp)
+	app.shutdown(context.Background())
+
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Fatalf("tracked temp survived shutdown: %v", err)
+	}
+	if p := app.tmpPath; p != "" {
+		t.Fatalf("tmpPath = %q after shutdown, want empty", p)
 	}
 }
 

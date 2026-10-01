@@ -116,6 +116,13 @@ type Request struct {
 	// files removed before the rewrite. Cleanup failures are logged, never
 	// returned, so they cannot abort the rewrite. May be nil.
 	Logf func(format string, args ...any)
+	// TrackTemp, when set, is called with the temp file path as soon as it is
+	// created and again with an empty string once that file has been published
+	// or removed. A long-lived host (the GUI) keeps the path so it can delete
+	// an in-flight temp file if it exits before the rewrite finishes. It is not
+	// safe for concurrent rewrites; a host that runs them in parallel must
+	// serialize the callback itself.
+	TrackTemp func(path string)
 }
 
 // Outcome is the successful result of a rewrite.
@@ -177,8 +184,17 @@ func Transform(req Request) (*Outcome, error) {
 		return nil, err
 	}
 	tmpName := tmp.Name()
-	// No-op once the temp file has been renamed into place.
-	defer os.Remove(tmpName)
+	if req.TrackTemp != nil {
+		req.TrackTemp(tmpName)
+	}
+	// No-op once the temp file has been renamed into place. Reporting the empty
+	// path afterwards lets the host forget it.
+	defer func() {
+		os.Remove(tmpName)
+		if req.TrackTemp != nil {
+			req.TrackTemp("")
+		}
+	}()
 
 	res, err := req.Transform(src, tmp)
 	// Release the source handle before any rename: Windows refuses to rename a
