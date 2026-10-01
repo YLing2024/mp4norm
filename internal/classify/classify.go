@@ -40,12 +40,14 @@ const (
 	CodeScanFailed     = "scan-failed"
 )
 
-// Reason is one plain-language reason behind a verdict. Count is only set for
-// the mdat-fragmented reason; Message carries the original probe text and is
-// used as a fallback for codes without dedicated copy.
+// Reason is one plain-language reason behind a verdict. Count is set for the
+// mdat-fragmented reason and Size for the moov-at-end reason, so the copy can
+// quantify the impact; Message carries the original probe text and is used as a
+// fallback for codes without dedicated copy.
 type Reason struct {
 	Code    string `json:"code"`
 	Count   int    `json:"count,omitempty"`
+	Size    int64  `json:"size,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -200,7 +202,7 @@ func classifyReport(rep *probe.Report, notInterleaved bool) (Status, []Reason) {
 
 	// Repairable problems, most important first.
 	if rep.MoovPosition == probe.MoovEnd {
-		add(Reason{Code: CodeMoovAtEnd})
+		add(Reason{Code: CodeMoovAtEnd, Size: rep.FileSize})
 	}
 	if rep.MdatCount > 1 {
 		add(Reason{Code: CodeMdatFragmented, Count: rep.MdatCount})
@@ -222,12 +224,25 @@ func classifyReport(rep *probe.Report, notInterleaved bool) (Status, []Reason) {
 	return StatusOK, nil
 }
 
+// sizeText renders a file size for reason copy: the shared binary-unit
+// formatter with a pointless trailing ".0" dropped, so "955 MiB" reads cleanly
+// while "1.2 GiB" keeps its precision.
+func sizeText(n int64) string {
+	return strings.TrimSuffix(probe.HumanBytes(n), ".0")
+}
+
 // Text renders a reason as one plain-language sentence. Unknown codes fall
 // back to the probe's own message so a reason is never rendered empty.
 func (r Reason) Text(lang string) string {
 	en := lang == "en"
 	switch r.Code {
 	case CodeMoovAtEnd:
+		if r.Size > 0 {
+			if en {
+				return fmt.Sprintf("Index at the end: the first frame needs the whole file (~%s)", sizeText(r.Size))
+			}
+			return fmt.Sprintf("索引在文件尾部：首次播放要读完整文件（约 %s）才能出画面", sizeText(r.Size))
+		}
 		if en {
 			return "Index at the end: players must read the whole file before the first frame"
 		}
