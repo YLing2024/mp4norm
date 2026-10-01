@@ -199,6 +199,46 @@ func TestCleanStaleTempsRemovesOnlyOldTempFiles(t *testing.T) {
 	}
 }
 
+// TestListTempFilesOldestFirstAndFiltered checks that listing finds only
+// rewrite temp files, oldest first, and tolerates a missing directory.
+func TestListTempFilesOldestFirstAndFiltered(t *testing.T) {
+	dir := t.TempDir()
+	older := filepath.Join(dir, TempPrefix+"older")
+	newer := filepath.Join(dir, TempPrefix+"newer")
+	for _, p := range []string{older, newer} {
+		if err := os.WriteFile(p, []byte("payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Decoys that must never be listed: a plain file and a directory whose
+	// name shares the temp prefix.
+	if err := os.WriteFile(filepath.Join(dir, "clip.mp4"), []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, TempPrefix+"dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tOld := time.Now().Add(-2 * time.Hour)
+	tNew := time.Now().Add(-1 * time.Minute)
+	if err := os.Chtimes(older, tOld, tOld); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newer, tNew, tNew); err != nil {
+		t.Fatal(err)
+	}
+
+	got := ListTempFiles(dir)
+	if len(got) != 2 || got[0].Path != older || got[1].Path != newer {
+		t.Fatalf("ListTempFiles = %+v, want [older newer]", got)
+	}
+	if got[0].Size != int64(len("payload")) {
+		t.Fatalf("Size = %d, want %d", got[0].Size, len("payload"))
+	}
+	if missing := ListTempFiles(filepath.Join(dir, "nope")); len(missing) != 0 {
+		t.Fatalf("ListTempFiles(missing) = %+v, want none", missing)
+	}
+}
+
 // TestTransformSweepsStaleTempResidue runs a real rewrite with old residue in
 // the target directory and requires the residue to be gone and logged.
 func TestTransformSweepsStaleTempResidue(t *testing.T) {
