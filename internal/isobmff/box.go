@@ -24,6 +24,21 @@ type Box struct {
 // End returns the offset just past the box.
 func (b Box) End() int64 { return b.Offset + b.Size }
 
+// Truncation records the final top-level box whose declared size ran past the
+// end of the file. The scanner tolerates this instead of failing: the box is
+// clamped to the bytes that are actually present and scanning stops. Callers
+// use it to surface a warning (see the probe package).
+type Truncation struct {
+	// Type is the 4-character type of the offending box.
+	Type string
+	// Offset is the absolute byte offset of the box header.
+	Offset int64
+	// Declared is the size the box header claimed, in bytes.
+	Declared int64
+	// Remaining is how many bytes were actually available from Offset to EOF.
+	Remaining int64
+}
+
 const (
 	normalHeaderSize = 8
 	largeHeaderSize  = 16
@@ -33,9 +48,19 @@ const (
 //
 // r must cover at least fileSize bytes starting at offset 0. Only box headers
 // are read, so this is safe and fast for multi-gigabyte files.
-func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, error) {
+//
+// The scanner is deliberately lenient about the tail of the file:
+//
+//   - fewer than 8 leftover bytes are ignored (not enough for a box header);
+//   - a box whose declared size extends past the end of the file is clamped to
+//     the bytes actually present, scanning stops, and the event is reported via
+//     the returned Truncation (nil when the file ends cleanly on a boundary).
+//
+// The returned error is reserved for genuine I/O failures; a malformed or
+// truncated tail is never the reason the whole scan fails.
+func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, *Truncation, error) {
 	if fileSize < 0 {
-		return nil, fmt.Errorf("negative file size %d", fileSize)
+		return nil, nil, fmt.Errorf("negative file size %d", fileSize)
 	}
 	var boxes []Box
 	var offset int64
@@ -44,7 +69,9 @@ func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, error) {
 	for offset < fileSize {
 		remaining := fileSize - offset
 		if remaining < normalHeaderSize {
-			return boxes, fmt.Errorf("truncated box header at offset %d", offset)
+			// Not enough bytes left to form a box header: treat as trailing
+			// residue and stop.
+			break
 		}
 
 		n := len(hdr)
@@ -52,7 +79,7 @@ func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, error) {
 			n = int(remaining)
 		}
 		if _, err := r.ReadAt(hdr[:n], offset); err != nil {
-			return boxes, fmt.Errorf("read box header at offset %d: %w", offset, err)
+			return boxes, nil, fmt.Errorf("read box header at offset %d: %w", offset, err)
 		}
 
 		size32 := binary.BigEndian.Uint32(hdr[0:4])
@@ -66,7 +93,8 @@ func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, error) {
 			boxSize = remaining
 		case 1:
 			if n < largeHeaderSize {
-				return boxes, fmt.Errorf("truncated 64-bit size at offset %d", offset)
+				// The 64-bit size is not fully present: stop leniently.
+				return boxes, nil, nil
 			}
 			headerSize = largeHeaderSize
 			boxSize = int64(binary.BigEndian.Uint64(hdr[8:16])) //nolint:gosec // bounded by file size check below
@@ -75,11 +103,27 @@ func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, error) {
 		}
 
 		if boxSize < headerSize {
-			return boxes, fmt.Errorf("invalid box size %d for %q at offset %d", boxSize, boxType, offset)
+			// A size smaller than its own header cannot advance the cursor.
+			// Stop rather than failing the whole scan.
+			break
 		}
 		if offset+boxSize > fileSize {
-			// Tolerate a truncated final box; record what is actually there.
+			// The final box claims more bytes than exist: clamp it to what is
+			// actually there, remember the truncation, and stop.
+			trunc := &Truncation{
+				Type:      boxType,
+				Offset:    offset,
+				Declared:  boxSize,
+				Remaining: remaining,
+			}
 			boxSize = remaining
+			boxes = append(boxes, Box{
+				Type:       boxType,
+				Offset:     offset,
+				Size:       boxSize,
+				HeaderSize: headerSize,
+			})
+			return boxes, trunc, nil
 		}
 
 		boxes = append(boxes, Box{
@@ -90,7 +134,7 @@ func ScanTopLevel(r io.ReaderAt, fileSize int64) ([]Box, error) {
 		})
 		offset += boxSize
 	}
-	return boxes, nil
+	return boxes, nil, nil
 }
 
 // ReadFtyp reads the major brand and the list of compatible brands from an

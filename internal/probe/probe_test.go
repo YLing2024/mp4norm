@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +41,27 @@ func hasCode(rep *Report, code string) bool {
 		}
 	}
 	return false
+}
+
+func hasBoxType(rep *Report, typ string) bool {
+	for _, b := range rep.Boxes {
+		if b.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// requireValidError asserts that err is the "not a valid MP4/ISO BMFF file"
+// rejection, which must only fire for an empty/misplaced start.
+func requireValidError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "not a valid MP4/ISO BMFF file") {
+		t.Fatalf("error = %v, want it to mention not a valid MP4/ISO BMFF file", err)
+	}
 }
 
 func TestAnalyzeMoovAtEnd(t *testing.T) {
@@ -94,6 +116,78 @@ func TestAnalyzeFragmented(t *testing.T) {
 	}
 	if !rep.NeedsNormalization() {
 		t.Error("NeedsNormalization = false, want true")
+	}
+}
+
+func TestAnalyzeRejectsGarbage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fake.mp4")
+	if err := os.WriteFile(path, []byte("not an mp4"), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	_, err := Analyze(path)
+	requireValidError(t, err)
+}
+
+// Regression: a normal MP4 followed by trailing garbage bytes must still be
+// analysed, with every real box present and a truncated-box warning attached.
+func TestAnalyzeTrailingGarbage(t *testing.T) {
+	path := writeMP4(t, ftypBox(), mkBox("mdat", []byte("video data")), mkBox("moov", []byte("meta")), []byte("JUNKJUNKJUNK"))
+	rep, err := Analyze(path)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	for _, typ := range []string{"ftyp", "mdat", "moov"} {
+		if !hasBoxType(rep, typ) {
+			t.Errorf("missing %s box: %+v", typ, rep.Boxes)
+		}
+	}
+	if !hasCode(rep, "truncated-box") {
+		t.Errorf("expected truncated-box finding, got %+v", rep.Findings)
+	}
+}
+
+// Regression: a normal MP4 followed by fewer than 8 bytes of residue must be
+// analysed successfully, and must not be reported as truncated.
+func TestAnalyzeTinyTail(t *testing.T) {
+	path := writeMP4(t, ftypBox(), mkBox("mdat", []byte("video data")), mkBox("moov", []byte("meta")), []byte("xy"))
+	rep, err := Analyze(path)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	for _, typ := range []string{"ftyp", "mdat", "moov"} {
+		if !hasBoxType(rep, typ) {
+			t.Errorf("missing %s box: %+v", typ, rep.Boxes)
+		}
+	}
+	if hasCode(rep, "truncated-box") {
+		t.Errorf("did not expect truncated-box finding, got %+v", rep.Findings)
+	}
+}
+
+// Regression: a file whose first box is not ftyp/styp is rejected even though
+// its top-level boxes parse cleanly.
+func TestAnalyzeRejectsNoFtyp(t *testing.T) {
+	path := writeMP4(t, mkBox("free", nil), mkBox("mdat", []byte("video data")))
+	_, err := Analyze(path)
+	requireValidError(t, err)
+}
+
+// Regression: zero top-level boxes (empty file) is the other rejection case.
+func TestAnalyzeRejectsEmpty(t *testing.T) {
+	path := writeMP4(t)
+	_, err := Analyze(path)
+	requireValidError(t, err)
+}
+
+// A clean MP4 must not carry the truncation warning.
+func TestAnalyzeNoTruncationWarning(t *testing.T) {
+	path := writeMP4(t, ftypBox(), mkBox("moov", []byte("meta")), mkBox("mdat", []byte("video data")))
+	rep, err := Analyze(path)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if hasCode(rep, "truncated-box") {
+		t.Errorf("unexpected truncated-box finding, got %+v", rep.Findings)
 	}
 }
 

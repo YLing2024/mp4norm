@@ -65,9 +65,19 @@ func Analyze(path string) (*Report, error) {
 		return nil, fmt.Errorf("%s is a directory", path)
 	}
 
-	boxes, err := isobmff.ScanTopLevel(f, fi.Size())
+	boxes, trunc, err := isobmff.ScanTopLevel(f, fi.Size())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	// The only thing that makes a file "not a valid MP4/ISO BMFF file" is an
+	// absent or misplaced start: ISO BMFF requires the file to begin with a
+	// file-type box (ftyp or styp). A malformed or truncated tail is tolerated
+	// above and reported as a finding instead.
+	if len(boxes) == 0 {
+		return nil, fmt.Errorf("%s: not a valid MP4/ISO BMFF file: no top-level boxes", path)
+	}
+	if first := boxes[0].Type; first != "ftyp" && first != "styp" {
+		return nil, fmt.Errorf("%s: not a valid MP4/ISO BMFF file: first box is %q, expected ftyp or styp", path, first)
 	}
 
 	rep := &Report{
@@ -80,6 +90,11 @@ func Analyze(path string) (*Report, error) {
 			rep.MajorBrand = major
 			rep.Compatible = compatible
 		}
+	}
+	if trunc != nil {
+		rep.add(SeverityWarn, "truncated-box", fmt.Sprintf(
+			"final box %q at offset %d declares %d bytes but only %d remain — file looks truncated or has trailing bytes",
+			trunc.Type, trunc.Offset, trunc.Declared, trunc.Remaining))
 	}
 	rep.analyse()
 	return rep, nil
