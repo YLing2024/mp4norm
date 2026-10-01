@@ -1,0 +1,130 @@
+[English](README.en.md) | [简体中文](README.md)
+
+# mp4norm
+
+Cross-platform **MP4 normalization** — make MP4 files open instantly and seek fast, by fixing the container layout instead of re-encoding.
+
+## The problem
+
+Many MP4 files are "weirdly packaged" in ways that are invisible until you try to play them:
+
+- the `moov` (index) atom sits at the **end** of the file → progressive/streaming playback has to download almost the whole file before the first frame;
+- audio and video samples are **not interleaved** → seeking makes the player jump back and forth across the file;
+- sparse/irregular keyframes, broken `elst` edit lists or inconsistent timescales → slow or broken scrubbing.
+
+The codec data is usually fine. It is the **container layout** that needs fixing.
+
+## What it does
+
+`mp4norm` rewrites the container **losslessly** (stream copy, no quality loss):
+
+1. Move `moov` to the front (**faststart**).
+2. Re-interleave audio/video into small time buckets (~0.5–1.0 s).
+3. Clean up edit lists / timescale inconsistencies and recompute chunk offsets (`stco`/`co64`).
+4. Output either a **progressive faststart MP4** or a **fragmented MP4 (fMP4) with `sidx`**, selectable.
+5. Validate the result (moov position, interleave delta, keyframe interval).
+
+`probe` reports graded findings — `critical` / `warn` / `info` — such as `moov-at-end` (index at the end), `fragmented` (fragmented file), `no-ftyp` (file type undeclared), and a `truncated-box` warning for a truncated tail or trailing bytes.
+
+When the source cannot be fixed by container surgery (very sparse keyframes, non-standard encoding, VFR), an **optional re-encode** path delegates to `ffmpeg`, preferring hardware encoders (NVENC / QSV / AMF / VideoToolbox).
+
+## Stack
+
+| Layer | Choice |
+| --- | --- |
+| Language | Go |
+| Container engine | [`Eyevinn/mp4ff`](https://github.com/Eyevinn/mp4ff) (MIT) |
+| Re-encode (optional) | `ffmpeg` subprocess, hardware encoders preferred |
+| GUI | [Wails](https://wails.io) (Go backend + web frontend) |
+| Platforms | Windows, macOS, Linux |
+
+## Performance principles
+
+- Lossless path is **I/O-bound**: single pass, large buffers / mmap, never load the whole file into memory.
+- No temp-file shuffling on the lossless path.
+- Concurrency across files.
+- Hardware encoders for the re-encode path.
+
+## Usage
+
+CLI:
+
+```
+mp4norm probe <file>                 # diagnose the container layout
+mp4norm normalize <input>            # faststart + interleave (lossless)
+mp4norm normalize -format fmp4 <in>  # fragmented MP4 with sidx (lossless)
+mp4norm faststart <input>            # only move moov to the front
+mp4norm reencode -crf 23 <input>     # optional re-encode (fix sparse keyframes / VFR)
+```
+
+Common flags: `-o <out>` output path, `-window <ms>` interleave window,
+`-frag-ms <ms>` fragment duration, `-vcodec h264|h265|copy`, `-hw auto|on|off`,
+`-gop <sec>` keyframe interval.
+
+`batch` normalizes many files or directories in parallel:
+
+```
+mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
+```
+
+Desktop GUI (Wails):
+
+```
+cd gui && wails build     # produces build/bin/mp4norm
+```
+
+### GUI language (bilingual)
+
+The GUI defaults to **Simplified Chinese**. A `中文 / English` switch sits in the
+top-right corner of the window and applies immediately; the **choice is
+remembered** (stored in browser local storage `localStorage`, key
+`mp4norm.lang`) and restored on the next launch. The native open/save dialog
+titles and the explanatory text for `probe` findings follow the active
+language too. Every parameter in the interface carries a one-line hint
+explaining what it is and how to choose.
+
+## Bundling ffmpeg
+
+The optional re-encode path uses an external ffmpeg. `mp4norm` looks for one in
+order: `MP4NORM_FFMPEG`, a binary bundled next to the executable or in the
+working directory (`ffmpeg/` or `third_party/ffmpeg/`), then `PATH`.
+
+Fetch a static build into `third_party/ffmpeg/bin`:
+
+```
+make fetch-ffmpeg   # or scripts/fetch-ffmpeg.ps1 / scripts/fetch-ffmpeg.sh
+```
+
+Note: the fetched builds are GPL. Redistributing them puts the bundle under GPL
+terms; ship an LGPL build or require a user-provided ffmpeg if that matters.
+
+## Development
+
+```
+make build   # CLI -> bin/mp4norm
+make test    # go test ./...
+make vet
+make fmt
+make bench   # lossless-path benchmarks
+make gui     # Wails desktop app -> gui/build/bin
+```
+
+CI (`.github/workflows/ci.yml`) runs vet, tests and a CLI build on Windows,
+macOS and Linux, and builds the GUI on all three. Tagging `v*` publishes CLI
+binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and
+windows/amd64.
+
+## Status
+
+Working: probe, lossless faststart, interleaving, fMP4 + sidx, optional ffmpeg
+re-encode with hardware-encoder detection, parallel batch CLI, and a Wails
+desktop UI (switchable between Chinese and English) — with cross-platform CI and
+a tag-driven release workflow.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Note: the fetched `ffmpeg` builds are GPL. Redistributing them puts the bundle
+under GPL terms; ship an LGPL build or require a user-provided ffmpeg if that
+matters.
