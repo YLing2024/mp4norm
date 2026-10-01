@@ -57,9 +57,12 @@ mp4norm normalize <input>            # faststart + 交织（无损）
 mp4norm normalize -format fmp4 <in>  # 带 sidx 的分片 MP4（无损）
 mp4norm faststart <input>            # 只把 moov 移到文件开头
 mp4norm reencode -crf 23 <input>     # 可选重编码（修关键帧稀疏 / VFR）
+mp4norm tmp <目录...>                # 列出中断残留的临时文件（`.mp4norm-tmp-*`）及大小
 ```
 
 常用 flag：`-o <out>` 输出路径、`-window <ms>` 交织窗口、`-frag-ms <ms>` 分片时长、`-vcodec h264|h265|copy`、`-hw auto|on|off`、`-gop <sec>` 关键帧间隔。
+
+规整过程中若进程被强杀（任务管理器结束进程、关窗口强退），可能留下 `.mp4norm-tmp-*` 临时文件。下一次规整开始前会自动清理目标目录中 **mtime 超过 60 分钟** 的陈旧残留并打印日志（正在运行的其它实例的临时文件较新，不会被误删）；`mp4norm tmp <目录>` 可随时查看残留。
 
 批量检测（推荐入口）—— 扫描一个文件夹，直接告诉你**每个文件要不要处理**：
 

@@ -55,11 +55,18 @@ mp4norm normalize <input>            # faststart + interleave (lossless)
 mp4norm normalize -format fmp4 <in>  # fragmented MP4 with sidx (lossless)
 mp4norm faststart <input>            # only move moov to the front
 mp4norm reencode -crf 23 <input>     # optional re-encode (fix sparse keyframes / VFR)
+mp4norm tmp <dir...>                 # list leftover temp files (`.mp4norm-tmp-*`) and their sizes
 ```
 
 Common flags: `-o <out>` output path, `-window <ms>` interleave window,
 `-frag-ms <ms>` fragment duration, `-vcodec h264|h265|copy`, `-hw auto|on|off`,
 `-gop <sec>` keyframe interval.
+
+If the process is killed mid-rewrite (Task Manager end task, forced window
+close), it can leave a `.mp4norm-tmp-*` file behind. Before each rewrite the
+target directory's residue older than **60 minutes** is swept automatically and
+logged (a concurrently running instance's temp file is fresh and never swept);
+`mp4norm tmp <dir>` shows what is currently there.
 
 Batch detection (the recommended entry point) — scan a folder and get a
 plain-language verdict per file:
