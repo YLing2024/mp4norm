@@ -112,6 +112,10 @@ type Request struct {
 	Fragmented bool
 	// Transform is the lossless rewrite to run.
 	Transform func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)
+	// Logf, when set, receives best-effort cleanup notes, such as stale temp
+	// files removed before the rewrite. Cleanup failures are logged, never
+	// returned, so they cannot abort the rewrite. May be nil.
+	Logf func(format string, args ...any)
 }
 
 // Outcome is the successful result of a rewrite.
@@ -160,6 +164,12 @@ func Transform(req Request) (*Outcome, error) {
 	if req.InPlace {
 		targetDir = filepath.Dir(req.Input)
 	}
+
+	// Sweep residue from an earlier run that was killed before its deferred
+	// cleanup could run. Fresh temp files (a concurrent instance) are left
+	// alone because their mtime is newer than StaleTempAfter. Best-effort by
+	// design: a failed sweep must never stop the rewrite that follows.
+	CleanStaleTemps(targetDir, StaleTempAfter, req.Logf)
 
 	tmp, err := os.CreateTemp(targetDir, TempPrefix+"*")
 	if err != nil {

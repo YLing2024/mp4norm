@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Eyevinn/mp4ff/mp4"
 
@@ -150,6 +153,98 @@ func TestInPlaceCustomBackupDir(t *testing.T) {
 	}
 }
 
+// collectLogs returns a logger that appends formatted lines to a slice.
+func collectLogs() (*[]string, func(format string, args ...any)) {
+	var logs []string
+	return &logs, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+}
+
+// TestCleanStaleTempsRemovesOnlyOldTempFiles is the core of the residue fix:
+// an old, killed-process temp file is swept and reported, while a fresh one
+// (possibly a concurrently running instance) is left untouched, as is every
+// file that is not a rewrite temp at all.
+func TestCleanStaleTempsRemovesOnlyOldTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, TempPrefix+"stale")
+	fresh := filepath.Join(dir, TempPrefix+"fresh")
+	other := filepath.Join(dir, "keep.txt")
+	for _, p := range []string{stale, fresh, other} {
+		if err := os.WriteFile(p, []byte("payload"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, logf := collectLogs()
+	removed := CleanStaleTemps(dir, StaleTempAfter, logf)
+
+	if len(removed) != 1 || removed[0].Path != stale {
+		t.Fatalf("removed = %+v, want only %s", removed, stale)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale temp still present: %v", err)
+	}
+	for _, p := range []string{fresh, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s was removed, want it kept: %v", p, err)
+		}
+	}
+	if len(*logs) != 1 {
+		t.Fatalf("logs = %v, want exactly one removal line", *logs)
+	}
+}
+
+// TestTransformSweepsStaleTempResidue runs a real rewrite with old residue in
+// the target directory and requires the residue to be gone and logged.
+func TestTransformSweepsStaleTempResidue(t *testing.T) {
+	in := writeMedia(t, true)
+	dir := filepath.Dir(in)
+	stale := filepath.Join(dir, TempPrefix+"residue")
+	if err := os.WriteFile(stale, []byte("residue"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	logs, logf := collectLogs()
+	out := filepath.Join(dir, "out.mp4")
+	if _, err := Transform(Request{Input: in, Output: out, Transform: faststartTransform, Logf: logf}); err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale residue survived the rewrite: %v", err)
+	}
+	if len(*logs) == 0 {
+		t.Fatal("cleanup was silent, want a log line")
+	}
+}
+
+// TestTransformKeepsFreshTempFile guards concurrent instances: a temp file with
+// a current mtime must never be swept by another run.
+func TestTransformKeepsFreshTempFile(t *testing.T) {
+	in := writeMedia(t, true)
+	dir := filepath.Dir(in)
+	fresh := filepath.Join(dir, TempPrefix+"active")
+	if err := os.WriteFile(fresh, []byte("active"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(dir, "out.mp4")
+	if _, err := Transform(Request{Input: in, Output: out, Transform: faststartTransform}); err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("fresh temp (concurrent instance) was removed: %v", err)
+	}
+}
+
 // TestInPlaceTruncatedProductKeepsOriginal is the failure drill: the transform
 // produces a valid-but-truncated file. Verification must reject it, delete the
 // product, leave no backup, and leave the source byte-for-byte identical.
@@ -202,7 +297,7 @@ func TestInPlaceTruncatedProductKeepsOriginal(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, de := range des {
-		if len(de.Name()) >= 13 && de.Name()[:13] == ".mp4norm-tmp-" {
+		if strings.HasPrefix(de.Name(), TempPrefix) {
 			t.Fatalf("temp file left behind: %s", de.Name())
 		}
 	}
