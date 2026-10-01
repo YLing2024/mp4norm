@@ -178,6 +178,11 @@ func orUnknown(s string) string {
 	return s
 }
 
+// HumanBytes formats a byte count with a magnitude-appropriate binary unit and
+// one decimal place (e.g. "781.1 MiB"). It is exported so the CLI scan table
+// and other callers render sizes exactly like the probe report does.
+func HumanBytes(n int64) string { return humanBytes(n) }
+
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

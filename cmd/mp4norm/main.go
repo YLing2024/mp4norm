@@ -4,16 +4,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/YLing2024/mp4norm/internal/classify"
 	"github.com/YLing2024/mp4norm/internal/ffmpeg"
 	"github.com/YLing2024/mp4norm/internal/isobmff"
 	"github.com/YLing2024/mp4norm/internal/normalize"
@@ -25,11 +29,25 @@ import (
 var version = "0.1.0-dev"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "mp4norm: error:", err)
-		os.Exit(1)
+	err := run(os.Args[1:])
+	if err == nil {
+		return
 	}
+	// `scan` reports its outcome through the exit code without it being an
+	// error to print (0/1/2 = clean / needs work / broken).
+	var ec exitCodeError
+	if errors.As(err, &ec) {
+		os.Exit(ec.code)
+	}
+	fmt.Fprintln(os.Stderr, "mp4norm: error:", err)
+	os.Exit(1)
 }
+
+// exitCodeError carries a process exit status that is not itself a failure to
+// report. main honours it without printing an error line.
+type exitCodeError struct{ code int }
+
+func (e exitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
 
 func run(args []string) error {
 	if len(args) == 0 {
@@ -45,6 +63,8 @@ func run(args []string) error {
 		return nil
 	case "probe":
 		return runProbe(args[1:])
+	case "scan":
+		return runScan(args[1:])
 	case "faststart":
 		return runFaststart(args[1:])
 	case "normalize":
@@ -78,6 +98,254 @@ func runProbe(args []string) error {
 	}
 	fmt.Print(rep.String())
 	return nil
+}
+
+// runScan classifies every file under the given directories (or the files
+// themselves) and prints a plain-language table. Exit code 0 = all clean,
+// 1 = something needs work, 2 = something is broken or could not be read.
+func runScan(args []string) error {
+	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	verbose := fs.Bool("v", false, "show the raw probe fields under each file")
+	needsWorkOnly := fs.Bool("needs-work", false, "only list files that need work")
+	asJSON := fs.Bool("json", false, "machine-readable JSON output")
+	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+		return err
+	}
+	inputs := fs.Args()
+	if len(inputs) == 0 {
+		return fmt.Errorf("scan: missing <directory|file...>")
+	}
+
+	files, bad := classify.Collect(inputs)
+	verdicts := classify.All(files)
+	for _, f := range bad {
+		verdicts = append(verdicts, classify.BrokenFromError(f.Path, f.Err))
+	}
+	sort.SliceStable(verdicts, func(i, j int) bool {
+		if verdicts[i].Name != verdicts[j].Name {
+			return verdicts[i].Name < verdicts[j].Name
+		}
+		return verdicts[i].Path < verdicts[j].Path
+	})
+
+	ok, nw, broken := scanSummary(verdicts)
+	target := scanTarget(inputs)
+
+	if *asJSON {
+		shown := verdicts
+		if *needsWorkOnly {
+			shown = filterNeedsWork(verdicts)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(scanJSON{
+			Target: target,
+			Counts: scanCountsJSON{OK: ok, NeedsWork: nw, Broken: broken, Total: len(verdicts)},
+			Files:  shown,
+		}); err != nil {
+			return err
+		}
+	} else {
+		printScanReport(os.Stdout, target, verdicts, *needsWorkOnly, *verbose)
+	}
+
+	if code := scanExitCode(ok, nw, broken); code != 0 {
+		return exitCodeError{code: code}
+	}
+	return nil
+}
+
+// scanSummary tallies verdicts by status.
+func scanSummary(vs []classify.Verdict) (ok, needsWork, broken int) {
+	for _, v := range vs {
+		switch v.Status {
+		case classify.StatusNeedsWork:
+			needsWork++
+		case classify.StatusBroken:
+			broken++
+		default:
+			ok++
+		}
+	}
+	return ok, needsWork, broken
+}
+
+func scanExitCode(ok, needsWork, broken int) int {
+	if broken > 0 {
+		return 2
+	}
+	if needsWork > 0 {
+		return 1
+	}
+	return 0
+}
+
+func filterNeedsWork(vs []classify.Verdict) []classify.Verdict {
+	out := make([]classify.Verdict, 0, len(vs))
+	for _, v := range vs {
+		if v.Status == classify.StatusNeedsWork {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func scanTarget(inputs []string) string {
+	if len(inputs) == 1 {
+		return inputs[0]
+	}
+	return fmt.Sprintf("%d 个位置", len(inputs))
+}
+
+type scanCountsJSON struct {
+	OK        int `json:"ok"`
+	NeedsWork int `json:"needsWork"`
+	Broken    int `json:"broken"`
+	Total     int `json:"total"`
+}
+
+type scanJSON struct {
+	Target string             `json:"target"`
+	Counts scanCountsJSON     `json:"counts"`
+	Files  []classify.Verdict `json:"files"`
+}
+
+// printScanReport writes the human table grouped by verdict, most urgent
+// first. Raw fields only appear with verbose.
+func printScanReport(w io.Writer, target string, vs []classify.Verdict, needsWorkOnly, verbose bool) {
+	ok, needsWork, broken := scanSummary(vs)
+	fmt.Fprintf(w, "扫描 %s —— 发现 %d 个 MP4 文件\n\n", target, len(vs))
+
+	var needs, brokens, oks []classify.Verdict
+	for _, v := range vs {
+		switch v.Status {
+		case classify.StatusNeedsWork:
+			needs = append(needs, v)
+		case classify.StatusBroken:
+			brokens = append(brokens, v)
+		default:
+			oks = append(oks, v)
+		}
+	}
+
+	shown := append([]classify.Verdict{}, needs...)
+	if !needsWorkOnly {
+		shown = append(shown, brokens...)
+		shown = append(shown, oks...)
+	}
+	nameW, sizeW := scanWidths(shown)
+
+	if len(needs) > 0 {
+		fmt.Fprintf(w, "需要处理（%d）：\n", len(needs))
+		printScanRows(w, needs, nameW, sizeW, verbose)
+		fmt.Fprintln(w)
+	}
+	if !needsWorkOnly {
+		if len(brokens) > 0 {
+			fmt.Fprintf(w, "无法处理（%d）：\n", len(brokens))
+			printScanRows(w, brokens, nameW, sizeW, verbose)
+			fmt.Fprintln(w)
+		}
+		if len(oks) > 0 {
+			fmt.Fprintf(w, "无需处理（%d）：\n", len(oks))
+			printScanRows(w, oks, nameW, sizeW, verbose)
+			fmt.Fprintln(w)
+		}
+	}
+	fmt.Fprintf(w, "共 %d 个：%d 个建议规整 / %d 个无需处理 / %d 个无法处理\n",
+		len(vs), needsWork, ok, broken)
+	if needsWork > 0 {
+		fmt.Fprintln(w, "下一步：mp4norm batch -outdir <输出目录> <目录>      批量规整")
+	}
+}
+
+func printScanRows(w io.Writer, vs []classify.Verdict, nameW, sizeW int, verbose bool) {
+	for _, v := range vs {
+		fmt.Fprintf(w, "  %s %s  %s  %s\n",
+			scanIcon(v.Status), padRight(v.Name, nameW), padLeft(probe.HumanBytes(v.Size), sizeW),
+			v.ReasonsText("zh"))
+		if !verbose {
+			continue
+		}
+		if v.Probe != nil {
+			fmt.Fprintf(w, "      brand=%s  moov=%s  mdat=%d  fragmented=%t  size=%d B\n",
+				orDash(v.Probe.MajorBrand), v.Probe.MoovPosition, v.Probe.MdatCount,
+				v.Probe.Fragmented, v.Size)
+		} else {
+			fmt.Fprintf(w, "      size=%d B  error=%s\n", v.Size, v.Error)
+		}
+	}
+}
+
+func scanIcon(s classify.Status) string {
+	switch s {
+	case classify.StatusNeedsWork:
+		return "⚠️"
+	case classify.StatusBroken:
+		return "❌"
+	default:
+		return "✅"
+	}
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "?"
+	}
+	return s
+}
+
+func scanWidths(vs []classify.Verdict) (nameW, sizeW int) {
+	for _, v := range vs {
+		if w := dispWidth(v.Name); w > nameW {
+			nameW = w
+		}
+		if w := dispWidth(probe.HumanBytes(v.Size)); w > sizeW {
+			sizeW = w
+		}
+	}
+	return nameW, sizeW
+}
+
+// dispWidth approximates the number of terminal cells a string occupies, so
+// names containing CJK characters line up in the scan table.
+func dispWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += runeWidth(r)
+	}
+	return w
+}
+
+func runeWidth(r rune) int {
+	switch {
+	case r >= 0xFE00 && r <= 0xFE0F, r >= 0x200B && r <= 0x200F:
+		return 0 // variation selectors and zero-width marks
+	case r >= 0x1100 && r <= 0x115F,
+		r >= 0x2E80 && r <= 0xA4CF,
+		r >= 0xAC00 && r <= 0xD7A3,
+		r >= 0xF900 && r <= 0xFAFF,
+		r >= 0xFE30 && r <= 0xFE4F,
+		r >= 0xFF00 && r <= 0xFF60,
+		r >= 0xFFE0 && r <= 0xFFE6,
+		r >= 0x20000 && r <= 0x3FFFD:
+		return 2
+	}
+	return 1
+}
+
+func padRight(s string, w int) string {
+	if n := w - dispWidth(s); n > 0 {
+		return s + strings.Repeat(" ", n)
+	}
+	return s
+}
+
+func padLeft(s string, w int) string {
+	if n := w - dispWidth(s); n > 0 {
+		return strings.Repeat(" ", n) + s
+	}
+	return s
 }
 
 func runFaststart(args []string) error {
@@ -466,6 +734,10 @@ Usage:
 
 Commands:
   probe <file>                       Inspect an MP4's container layout and report problems
+  scan [-v] [-needs-work] [-json] <dir|file...>
+                                     Scan a folder and say, in plain language, which files
+                                     are fine, which are worth normalizing, and which are
+                                     broken. Exit code 0/1/2 = clean/needs work/broken.
   normalize [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-o out] <input>
                                      Move moov to the front and interleave (progressive),
                                      or write a fragmented MP4 with sidx (fmp4). Lossless.
