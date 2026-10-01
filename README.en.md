@@ -92,10 +92,11 @@ cd gui && wails build                        # produces build/bin/mp4norm
 ./build/bin/mp4norm.exe "D:\your\video\dir"  # or pass dirs/files on the command line
 ```
 
-- "Choose folder…" or "Choose files…" (multi-select) → the list shows a **verdict and reason per file**, filterable by verdict and sortable by size
-- "Batch normalize" processes every file that needs work, showing per-file status and overall progress, ending with an ok / skipped / failed summary; verdicts and the button count refresh afterwards
+- "Choose folder…" or "Choose files…" (multi-select), or **drag files/folders straight into the window** → the list shows a **verdict and reason per file**, filterable by verdict and sortable by size
+- "Fix N file(s)" processes every file that needs work, showing `Fixing N/M: filename` plus per-file status, ending with an ok / skipped / failed summary; failed rows offer **Retry**, and the verdicts and button count refresh afterwards
 - Raw fields (brand / moov position / mdat boxes) live in each row's details instead of the main view
-- The single-file flow (pick one file → inspect → normalize / re-encode) is still there
+- The single-file flow (pick one file → inspect → normalize / re-encode) is collapsed into a "Single file" row until you open it
+- Re-encoding is an optional advanced path: **usually unnecessary**, only for slow seeking or odd frame rates; it re-encodes and is lossy
 
 ### GUI language (bilingual)
 
@@ -104,8 +105,9 @@ top-right corner of the window and applies immediately; the **choice is
 remembered** (stored in browser local storage `localStorage`, key
 `mp4norm.lang`) and restored on the next launch. The native open/save dialog
 titles and the explanatory text for `probe` findings follow the active
-language too. Every parameter in the interface carries a one-line hint
-explaining what it is and how to choose.
+language too. Every parameter carries a single-line hint, with the full
+explanation tucked into the **ⓘ** popover next to the label (shown on hover or
+click).
 
 ## Bundling ffmpeg
 
