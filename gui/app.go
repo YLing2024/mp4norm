@@ -16,13 +16,33 @@ import (
 
 // App is the Wails application, exposing the mp4norm kernel to the frontend.
 type App struct {
-	ctx context.Context
+	ctx  context.Context
+	lang string
 }
 
 // NewApp creates a new App.
-func NewApp() *App { return &App{} }
+func NewApp() *App { return &App{lang: "zh"} }
 
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+
+// SetLanguage selects the language used for native dialogs. It accepts "zh"
+// (default) or "en"; anything else falls back to "zh".
+func (a *App) SetLanguage(lang string) {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "en":
+		a.lang = "en"
+	default:
+		a.lang = "zh"
+	}
+}
+
+// dialogText returns the open/save titles and filter name for the active language.
+func (a *App) dialogText() (openTitle, saveTitle, filterName string) {
+	if a.lang == "en" {
+		return "Choose an MP4 file", "Save MP4", "Video"
+	}
+	return "选择 MP4 文件", "保存 MP4", "视频"
+}
 
 // Probe diagnoses a file's container layout.
 func (a *App) Probe(path string) (*probe.Report, error) {
@@ -31,16 +51,18 @@ func (a *App) Probe(path string) (*probe.Report, error) {
 
 // ChooseInput opens a file dialog and returns the chosen path (empty if cancelled).
 func (a *App) ChooseInput() (string, error) {
+	openTitle, _, filterName := a.dialogText()
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:   "Choose an MP4 file",
-		Filters: []runtime.FileFilter{{DisplayName: "Video", Pattern: "*.mp4;*.m4v;*.mov"}},
+		Title:   openTitle,
+		Filters: []runtime.FileFilter{{DisplayName: filterName, Pattern: "*.mp4;*.m4v;*.mov"}},
 	})
 }
 
 // ChooseOutput opens a save dialog and returns the chosen path (empty if cancelled).
 func (a *App) ChooseOutput(defaultName string) (string, error) {
+	_, saveTitle, _ := a.dialogText()
 	return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "Save MP4",
+		Title:           saveTitle,
 		DefaultFilename: defaultName,
 	})
 }
