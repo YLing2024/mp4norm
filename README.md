@@ -63,12 +63,42 @@ Desktop GUI (Wails):
 cd gui && wails build     # produces build/bin/mp4norm
 ```
 
+## Bundling ffmpeg
+
+The optional re-encode path uses an external ffmpeg. `mp4norm` looks for one in
+order: `MP4NORM_FFMPEG`, a binary bundled next to the executable or in the
+working directory (`ffmpeg/` or `third_party/ffmpeg/`), then `PATH`.
+
+Fetch a static build into `third_party/ffmpeg/bin`:
+
+```
+make fetch-ffmpeg   # or scripts/fetch-ffmpeg.ps1 / scripts/fetch-ffmpeg.sh
+```
+
+Note: the fetched builds are GPL. Redistributing them puts the bundle under GPL
+terms; ship an LGPL build or require a user-provided ffmpeg if that matters.
+
+## Development
+
+```
+make build   # CLI -> bin/mp4norm
+make test    # go test ./...
+make vet
+make fmt
+make bench   # lossless-path benchmarks
+make gui     # Wails desktop app -> gui/build/bin
+```
+
+CI (`.github/workflows/ci.yml`) runs vet, tests and a CLI build on Windows,
+macOS and Linux, and builds the GUI on all three. Tagging `v*` publishes CLI
+binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and
+windows/amd64.
+
 ## Status
 
-Working: probe, lossless faststart, interleaving, fMP4 + sidx output, and the
-optional ffmpeg re-encode path (with hardware encoder detection). A Wails
-desktop UI wraps all of it. Remaining: bundling an ffmpeg build for distribution
-and CI packaging for the three platforms.
+Working: probe, lossless faststart, interleaving, fMP4 + sidx, optional ffmpeg
+re-encode with hardware-encoder detection, parallel batch CLI, and a Wails
+desktop UI — with cross-platform CI and a tag-driven release workflow.
 
 ## License
 
