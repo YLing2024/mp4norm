@@ -23,6 +23,11 @@ const minWatchInterval = 30 * time.Second
 // beside its input.
 const watchSuffix = ".norm.mp4"
 
+// watchSettleDelay is the gap between the observation pass and the processing
+// pass of a -once run. Two observations separated by this delay make the
+// still-being-written check meaningful even when the writer is slow.
+const watchSettleDelay = time.Second
+
 // runWatch implements `mp4norm watch`: it polls the given directories, waits
 // until each file has stopped being written, and normalizes the ones that need
 // work. With -once it performs a single observation+processing round and exits
@@ -138,6 +143,7 @@ func runWatch(args []string) error {
 			}
 			r.Observe()
 		}
+		time.Sleep(watchSettleDelay)
 		total, err := runRound()
 		if err != nil {
 			return err
