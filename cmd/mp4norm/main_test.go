@@ -61,3 +61,25 @@ func TestRequireOneArgAcceptsSingle(t *testing.T) {
 		t.Fatalf("arg = %q, want a.mp4", got)
 	}
 }
+
+func TestBuildSpecRejectsInPlaceWithOutput(t *testing.T) {
+	if _, err := buildSpec("normalize", "in.mp4", "out.mp4", ".norm.mp4", true, ""); err == nil {
+		t.Fatal("buildSpec = nil, want a mutual-exclusion error")
+	}
+}
+
+func TestBuildSpecRejectsBackupDirWithoutInPlace(t *testing.T) {
+	if _, err := buildSpec("normalize", "in.mp4", "", ".norm.mp4", false, "/tmp/bk"); err == nil {
+		t.Fatal("buildSpec = nil, want a backup-dir error")
+	}
+}
+
+func TestBuildSpecResolvesNewFileOutput(t *testing.T) {
+	spec, err := buildSpec("normalize", "in.mp4", "", ".norm.mp4", false, "")
+	if err != nil {
+		t.Fatalf("buildSpec: %v", err)
+	}
+	if spec.inPlace || spec.output != "in.norm.mp4" {
+		t.Fatalf("spec = %+v, want new-file output in.norm.mp4", spec)
+	}
+}

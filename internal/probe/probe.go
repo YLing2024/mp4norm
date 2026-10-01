@@ -46,7 +46,24 @@ type Report struct {
 	Fragmented   bool
 	MoovPosition MoovPosition
 	MdatCount    int
-	Findings     []Finding
+	// MoovSize is the total size of the moov box in bytes (0 when absent). It
+	// is what a player must read before the first frame when the index leads.
+	MoovSize int64
+	// FirstPlayBytes approximates how many bytes a player must read before it
+	// can start playing. It is a deliberately coarse estimate (see estimate).
+	FirstPlayBytes int64
+	Findings       []Finding
+}
+
+// estimateFirstPlayBytes approximates the "bytes to first playable frame".
+// The rule is intentionally conservative and labelled as an approximation in
+// user-facing output: an index at the tail forces a full read, while a leading
+// index costs roughly the moov plus a little overhead.
+func estimateFirstPlayBytes(fileSize, moovSize int64, pos MoovPosition) int64 {
+	if pos == MoovFront && moovSize > 0 {
+		return int64(float64(moovSize) * 1.2)
+	}
+	return fileSize
 }
 
 // Analyze opens and inspects the file at path.
@@ -129,6 +146,11 @@ func (r *Report) analyse() {
 	if isobmff.Find(r.Boxes, "ftyp") == nil {
 		r.add(SeverityWarn, "no-ftyp", "no ftyp box found; file type is undeclared")
 	}
+
+	if moov != nil {
+		r.MoovSize = moov.Size
+	}
+	r.FirstPlayBytes = estimateFirstPlayBytes(r.FileSize, r.MoovSize, r.MoovPosition)
 }
 
 func (r *Report) add(sev Severity, code, msg string) {

@@ -17,11 +17,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/YLing2024/mp4norm/internal/backup"
 	"github.com/YLing2024/mp4norm/internal/classify"
 	"github.com/YLing2024/mp4norm/internal/ffmpeg"
-	"github.com/YLing2024/mp4norm/internal/isobmff"
 	"github.com/YLing2024/mp4norm/internal/normalize"
 	"github.com/YLing2024/mp4norm/internal/probe"
+	"github.com/YLing2024/mp4norm/internal/safefile"
 )
 
 // version is a var (not a const) so release builds can inject it with
@@ -73,6 +74,12 @@ func run(args []string) error {
 		return runReencode(args[1:])
 	case "batch":
 		return runBatch(args[1:])
+	case "backups":
+		return runBackups(args[1:])
+	case "restore":
+		return runRestore(args[1:])
+	case "forget":
+		return runForget(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
 			return fmt.Errorf("help: unexpected extra argument(s): %s", strings.Join(args[1:], " "))
@@ -351,6 +358,7 @@ func padLeft(s string, w int) string {
 func runFaststart(args []string) error {
 	fs := flag.NewFlagSet("faststart", flag.ContinueOnError)
 	out := fs.String("o", "", "output file (default: <input>.norm.mp4)")
+	inPlace, backupDir := outputModeFlags(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
@@ -358,7 +366,11 @@ func runFaststart(args []string) error {
 	if err != nil {
 		return err
 	}
-	return transform(in, outputPath(*out, in, ".norm.mp4"), normalize.Faststart, false)
+	spec, err := buildSpec("faststart", in, *out, ".norm.mp4", *inPlace, *backupDir)
+	if err != nil {
+		return err
+	}
+	return runTransform(in, spec, normalize.Faststart, false)
 }
 
 func runNormalize(args []string) error {
@@ -367,6 +379,7 @@ func runNormalize(args []string) error {
 	format := fs.String("format", "progressive", "output format: progressive or fmp4")
 	window := fs.Int("window", 1000, "interleave window in milliseconds (progressive)")
 	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
+	inPlace, backupDir := outputModeFlags(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
@@ -374,12 +387,115 @@ func runNormalize(args []string) error {
 	if err != nil {
 		return err
 	}
-	outPath := outputPath(*out, in, ".norm.mp4")
+	spec, err := buildSpec("normalize", in, *out, ".norm.mp4", *inPlace, *backupDir)
+	if err != nil {
+		return err
+	}
 	fn, fragmented, err := normalizeFunc(*format, *window, *fragMs)
 	if err != nil {
 		return err
 	}
-	return transform(in, outPath, fn, fragmented)
+	return runTransform(in, spec, fn, fragmented)
+}
+
+// outputModeFlags registers the in-place output mode shared by the lossless
+// commands. Both flags are opt-in, so their absence keeps the historical
+// "write a new file" behavior exactly.
+func outputModeFlags(fs *flag.FlagSet) (*bool, *string) {
+	inPlace := fs.Bool("in-place", false, "replace the input file after backing it up")
+	backupDir := fs.String("backup-dir", "", "directory for in-place backups (default: <input dir>/.mp4norm-backup)")
+	return inPlace, backupDir
+}
+
+// transformSpec is the resolved output mode for one lossless rewrite.
+type transformSpec struct {
+	inPlace   bool
+	backupDir string
+	output    string
+}
+
+// buildSpec validates the output-mode flags and resolves the new-file path.
+func buildSpec(cmd, in, out, suffix string, inPlace bool, backupDir string) (transformSpec, error) {
+	if inPlace && out != "" {
+		return transformSpec{}, fmt.Errorf("%s: -in-place and -o are mutually exclusive", cmd)
+	}
+	if !inPlace && backupDir != "" {
+		return transformSpec{}, fmt.Errorf("%s: -backup-dir requires -in-place", cmd)
+	}
+	spec := transformSpec{inPlace: inPlace, backupDir: backupDir}
+	if !inPlace {
+		spec.output = outputPath(out, in, suffix)
+	}
+	return spec, nil
+}
+
+// runTransform performs one lossless rewrite through the shared safe write path
+// and prints the before/after benefit summary.
+func runTransform(in string, spec transformSpec, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error), fragmented bool) error {
+	oc, err := safefile.Transform(safefile.Request{
+		Input:      in,
+		Output:     spec.output,
+		InPlace:    spec.inPlace,
+		BackupDir:  spec.backupDir,
+		Fragmented: fragmented,
+		Transform:  fn,
+	})
+	if err != nil {
+		return err
+	}
+	printOutcome(oc, fragmented)
+	return nil
+}
+
+// printOutcome writes the "wrote ..." line followed by the before/after proof.
+func printOutcome(oc *safefile.Outcome, fragmented bool) {
+	fmt.Printf("wrote %s\n", oc.Output)
+	if fragmented {
+		fmt.Printf("  size %s -> %s, fragmented: %d moof/mdat pairs\n",
+			humanSize(oc.Result.InputSize), humanSize(oc.Result.OutputSize), reportMdat(oc.After))
+	} else {
+		fmt.Printf("  size %s -> %s, moov moved to front (mdat shifted %+d B)\n",
+			humanSize(oc.Result.InputSize), humanSize(oc.Result.OutputSize), oc.Result.Delta)
+	}
+	if oc.BackupPath != "" {
+		fmt.Printf("  original backed up to %s\n", oc.BackupPath)
+	}
+	fmt.Println()
+	printBenefit(os.Stdout, oc.Before, oc.After, fragmented)
+	// Keep the long-standing diagnostic dump so default-mode output is not
+	// impoverished by the added summary.
+	if oc.After != nil {
+		fmt.Println()
+		fmt.Print(oc.After.String())
+	}
+}
+
+// reportMdat guards against a nil post-probe report.
+func reportMdat(r *probe.Report) int {
+	if r == nil {
+		return 0
+	}
+	return r.MdatCount
+}
+
+// printBenefit renders the before/after container improvements. Sizes are
+// clearly marked as approximations: they describe what a player must read
+// before the first frame, not a guarantee.
+func printBenefit(w io.Writer, before, after *probe.Report, fragmented bool) {
+	if before == nil || after == nil {
+		return
+	}
+	fmt.Fprintln(w, "✅ 已完成（无损，画质不变）")
+	if !fragmented {
+		fmt.Fprintf(w, "   首次可播放需读取：约 %s → 约 %s\n",
+			probe.HumanBytes(before.FirstPlayBytes), probe.HumanBytes(after.FirstPlayBytes))
+		fmt.Fprintf(w, "   数据碎片：%d 块 → %d 块\n", before.MdatCount, after.MdatCount)
+	} else {
+		fmt.Fprintf(w, "   首次可播放需读取：约 %s → 约 %s\n",
+			probe.HumanBytes(before.FirstPlayBytes), probe.HumanBytes(after.FirstPlayBytes))
+		fmt.Fprintf(w, "   分片：%d 段\n", after.MdatCount)
+	}
+	fmt.Fprintf(w, "   体积：%s → %s\n", probe.HumanBytes(before.FileSize), probe.HumanBytes(after.FileSize))
 }
 
 // normalizeFunc builds the lossless transform for the requested output format
@@ -461,94 +577,6 @@ func runReencode(args []string) error {
 	return nil
 }
 
-// applyTransform runs a normalizer function against in, writing to outPath
-// atomically via a temp file.
-func applyTransform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)) (*normalize.Result, error) {
-	inFile, err := os.Open(in)
-	if err != nil {
-		return nil, err
-	}
-	defer inFile.Close()
-
-	src, err := validExtent(inFile)
-	if err != nil {
-		return nil, err
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(outPath), ".mp4norm-*")
-	if err != nil {
-		return nil, err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename
-
-	res, err := fn(src, tmp)
-	if err != nil {
-		tmp.Close()
-		return nil, err
-	}
-	if err := tmp.Close(); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmpName, outPath); err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-// validExtent returns a read view of f limited to its well-formed top-level
-// boxes. Trailing bytes that do not form a box (a malformed final box or a
-// short residue) are hidden so that strict MP4 decoders — mp4ff in particular —
-// accept files that our own scanner already treats as valid. The lossless
-// transforms never copy those bytes, so the output is unaffected.
-func validExtent(f *os.File) (normalize.ReadSeekerAt, error) {
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	boxes, trunc, err := isobmff.ScanTopLevel(f, fi.Size())
-	if err != nil {
-		return nil, err
-	}
-	end := fi.Size()
-	if trunc != nil {
-		// Last box claims more than exists; keep only the boxes before it.
-		end = trunc.Offset
-	} else if len(boxes) > 0 {
-		end = boxes[len(boxes)-1].End()
-	}
-	if end >= fi.Size() || end <= 0 {
-		return f, nil
-	}
-	return io.NewSectionReader(f, 0, end), nil
-}
-
-// transform is applyTransform plus terminal output and a post-run probe.
-// fragmented selects the fMP4 wording for the summary line.
-func transform(in, outPath string, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error), fragmented bool) error {
-	res, err := applyTransform(in, outPath, fn)
-	if err != nil {
-		return err
-	}
-
-	rep, err := probe.Analyze(outPath)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("wrote %s\n", outPath)
-	if fragmented {
-		fmt.Printf("  size %s -> %s, fragmented: %d moof/mdat pairs\n",
-			humanSize(res.InputSize), humanSize(res.OutputSize), rep.MdatCount)
-	} else {
-		fmt.Printf("  size %s -> %s, moov moved to front (mdat shifted %+d B)\n",
-			humanSize(res.InputSize), humanSize(res.OutputSize), res.Delta)
-	}
-	fmt.Println()
-	fmt.Print(rep.String())
-	return nil
-}
-
 func runBatch(args []string) error {
 	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
 	jobs := fs.Int("jobs", runtime.NumCPU(), "parallel workers")
@@ -557,6 +585,7 @@ func runBatch(args []string) error {
 	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
 	outdir := fs.String("outdir", "", "output directory (default: next to each input)")
 	suffix := fs.String("suffix", ".norm.mp4", "output filename suffix")
+	inPlace, backupDir := outputModeFlags(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
@@ -567,7 +596,13 @@ func runBatch(args []string) error {
 	if len(inputs) == 0 {
 		return fmt.Errorf("batch: no input files")
 	}
-	fn, _, err := normalizeFunc(*format, *window, *fragMs)
+	if *inPlace && *outdir != "" {
+		return fmt.Errorf("batch: -in-place and -outdir are mutually exclusive")
+	}
+	if !*inPlace && *backupDir != "" {
+		return fmt.Errorf("batch: -backup-dir requires -in-place")
+	}
+	fn, fragmented, err := normalizeFunc(*format, *window, *fragMs)
 	if err != nil {
 		return err
 	}
@@ -580,39 +615,174 @@ func runBatch(args []string) error {
 	if *jobs < 1 {
 		*jobs = 1
 	}
+	type item struct {
+		in  string
+		out string
+		oc  *safefile.Outcome
+		err error
+	}
+	results := make([]item, len(inputs))
 	sem := make(chan struct{}, *jobs)
 	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var okCount, failCount int
 	start := time.Now()
 
-	for _, in := range inputs {
-		in := in
+	for i, in := range inputs {
+		i, in := i, in
 		out := batchOutput(in, *outdir, *suffix)
+		if *inPlace {
+			out = in
+		}
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if _, err := applyTransform(in, out, fn); err != nil {
-				mu.Lock()
-				failCount++
-				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "fail %s: %v\n", in, err)
-				return
-			}
-			mu.Lock()
-			okCount++
-			mu.Unlock()
-			fmt.Printf("ok   %s -> %s\n", in, out)
+			oc, err := safefile.Transform(safefile.Request{
+				Input:      in,
+				Output:     out,
+				InPlace:    *inPlace,
+				BackupDir:  *backupDir,
+				Fragmented: fragmented,
+				Transform:  fn,
+			})
+			results[i] = item{in: in, out: out, oc: oc, err: err}
 		}()
 	}
 	wg.Wait()
 
+	var okCount, failCount int
+	var beforeFP, afterFP int64
+	for _, r := range results {
+		if r.err != nil {
+			failCount++
+			fmt.Fprintf(os.Stderr, "fail %s: %v\n", r.in, r.err)
+			continue
+		}
+		okCount++
+		fmt.Printf("ok   %s -> %s\n", r.in, r.out)
+		printBenefit(os.Stdout, r.oc.Before, r.oc.After, fragmented)
+		if r.oc.Before != nil && r.oc.After != nil {
+			beforeFP += r.oc.Before.FirstPlayBytes
+			afterFP += r.oc.After.FirstPlayBytes
+		}
+	}
+
 	fmt.Printf("\n%d ok, %d failed in %s\n", okCount, failCount, time.Since(start).Round(time.Millisecond))
+	if okCount > 0 {
+		fmt.Printf("共 %d 个文件，合计“首次可播放需读取”从约 %s 降到约 %s\n",
+			okCount, probe.HumanBytes(beforeFP), probe.HumanBytes(afterFP))
+	}
 	if failCount > 0 {
 		return fmt.Errorf("batch: %d file(s) failed", failCount)
 	}
+	return nil
+}
+
+// runBackups lists the backups stored for a directory (or a backup directory
+// itself).
+func runBackups(args []string) error {
+	fs := flag.NewFlagSet("backups", flag.ContinueOnError)
+	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
+		return fmt.Errorf("backups: want exactly one <directory>")
+	}
+	dir := backup.ResolveDir(rest[0])
+	entries, err := backup.List(dir)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("备份目录：%s\n", dir)
+	if len(entries) == 0 {
+		fmt.Println("没有找到备份。")
+		return nil
+	}
+	fmt.Printf("找到 %d 份备份（新到的在前）：\n\n", len(entries))
+	for _, e := range entries {
+		state := "原文件缺失"
+		if e.OriginalExists {
+			state = "原文件存在"
+		}
+		missing := ""
+		if !e.BackupExists {
+			missing = " [备份文件缺失]"
+		}
+		fmt.Printf("  %s\n", e.Original)
+		fmt.Printf("    备份=%s%s  大小=%s  时间=%s  %s\n",
+			e.Backup, missing, probe.HumanBytes(e.Size),
+			e.Created.Local().Format("2006-01-02 15:04:05"), state)
+	}
+	return nil
+}
+
+// runRestore puts the newest backup of a file back in place. If the file still
+// exists, its current version is backed up first so the restore is undoable.
+func runRestore(args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	dirFlag := fs.String("backup-dir", "", "backup directory (default: alongside the file)")
+	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+		return err
+	}
+	file, err := requireOneArg(fs, "restore")
+	if err != nil {
+		return err
+	}
+	dir := *dirFlag
+	if dir == "" {
+		dir = backup.DefaultDir(file)
+	}
+	res, err := backup.Restore(dir, file)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已恢复 %s\n", file)
+	fmt.Printf("  使用备份  %s（%s，%s）\n", res.Restored.Backup,
+		probe.HumanBytes(res.Restored.Size),
+		res.Restored.Created.Local().Format("2006-01-02 15:04:05"))
+	if res.Replaced != nil {
+		fmt.Printf("  被覆盖的当前版本已另存为备份  %s\n", res.Replaced.Backup)
+	}
+	return nil
+}
+
+// runForget deletes every backup of a file. Without --yes it only lists them.
+func runForget(args []string) error {
+	fs := flag.NewFlagSet("forget", flag.ContinueOnError)
+	dirFlag := fs.String("backup-dir", "", "backup directory (default: alongside the file)")
+	yes := fs.Bool("yes", false, "confirm deletion")
+	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
+		return err
+	}
+	file, err := requireOneArg(fs, "forget")
+	if err != nil {
+		return err
+	}
+	dir := *dirFlag
+	if dir == "" {
+		dir = backup.DefaultDir(file)
+	}
+	entries, err := backup.Find(dir, file)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Printf("没有找到 %s 的备份。\n", file)
+		return nil
+	}
+	if !*yes {
+		fmt.Printf("将删除 %s 的 %d 份备份（加 --yes 才会执行）：\n", file, len(entries))
+		for _, e := range entries {
+			fmt.Printf("  %s\n", e.Backup)
+		}
+		return nil
+	}
+	n, err := backup.Forget(dir, file)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已删除 %s 的 %d 份备份。\n", file, n)
 	return nil
 }
 
@@ -738,12 +908,19 @@ Commands:
                                      Scan a folder and say, in plain language, which files
                                      are fine, which are worth normalizing, and which are
                                      broken. Exit code 0/1/2 = clean/needs work/broken.
-  normalize [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-o out] <input>
+  normalize [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-o out] [-in-place] [-backup-dir dir] <input>
                                      Move moov to the front and interleave (progressive),
                                      or write a fragmented MP4 with sidx (fmp4). Lossless.
-  faststart [-o out] <input>         Only move moov to the front (lossless, no re-encode)
-  batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
+                                     -in-place replaces the input (a backup is kept); it is
+                                     mutually exclusive with -o.
+  faststart [-o out] [-in-place] [-backup-dir dir] <input>
+                                     Only move moov to the front (lossless, no re-encode)
+  batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <input...|dir...>
                                      Normalize many files or directories in parallel
+  backups <directory>                List the backups stored for a directory
+  restore [-backup-dir dir] <file>   Put a file's newest backup back in place
+  forget [-backup-dir dir] --yes <file>
+                                     Delete a file's backups (without --yes, just list them)
   reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
                                      Optional re-encode to fix sparse keyframes / VFR
   version                            Print the version
