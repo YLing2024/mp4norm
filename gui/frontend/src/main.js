@@ -241,15 +241,15 @@ const statusText = (status) => t(`status.${status}`);
 // reasonTextOf localizes a classification reason. t() returns the key itself
 // when a translation is missing, so an unknown code falls back to the raw
 // probe message instead of showing a bare "reason.xxx".
-const reasonTextOf = (r) => {
+const reasonTextOf = (r, size) => {
   const key = `reason.${r.code}`;
-  const s = t(key, { n: r.count });
+  const s = t(key, { n: r.count, size: size ? humanBytes(size).replace('.0 ', ' ') : '' });
   return s === key ? r.message || r.code : s;
 };
 
 const reasonText = (v) => {
   if (!v.reasons || !v.reasons.length) return t('reason.ok');
-  return v.reasons.map(reasonTextOf).join(' + ');
+  return v.reasons.map((r) => reasonTextOf(r, v.size)).join(' + ');
 };
 
 const rawDetails = (v) => {
