@@ -439,12 +439,19 @@ func runTransform(in string, spec transformSpec, fn func(normalize.ReadSeekerAt,
 		BackupDir:  spec.backupDir,
 		Fragmented: fragmented,
 		Transform:  fn,
+		Logf:       cleanupLog,
 	})
 	if err != nil {
 		return err
 	}
 	printOutcome(oc, fragmented)
 	return nil
+}
+
+// cleanupLog reports best-effort cleanup notes (stale temp residue removed
+// before a rewrite) on stderr, leaving the command's stdout report untouched.
+func cleanupLog(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "mp4norm: "+format+"\n", args...)
 }
 
 // printOutcome writes the "wrote ..." line followed by the before/after proof.
@@ -644,6 +651,7 @@ func runBatch(args []string) error {
 				BackupDir:  *backupDir,
 				Fragmented: fragmented,
 				Transform:  fn,
+				Logf:       cleanupLog,
 			})
 			results[i] = item{in: in, out: out, oc: oc, err: err}
 		}()
