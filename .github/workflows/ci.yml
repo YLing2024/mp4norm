@@ -62,4 +62,4 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
       - name: Build GUI
         working-directory: gui
-        run: wails build -skipbindings=false
+        run: wails build
