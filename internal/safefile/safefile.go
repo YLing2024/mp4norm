@@ -10,6 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/YLing2024/mp4norm/internal/backup"
 	"github.com/YLing2024/mp4norm/internal/isobmff"
@@ -17,6 +20,82 @@ import (
 	"github.com/YLing2024/mp4norm/internal/probe"
 	"github.com/YLing2024/mp4norm/internal/verify"
 )
+
+// TempPrefix names the temporary files a rewrite streams into the target
+// directory. os.CreateTemp and the stale-file cleanup share this one constant,
+// so the naming rule can never drift between where residue is written and
+// where it is swept.
+const TempPrefix = ".mp4norm-tmp-"
+
+// StaleTempAfter is how long a temporary file may sit untouched in a target
+// directory before a later rewrite treats it as residue from a process that
+// was killed. A concurrently running instance keeps its own temp file's mtime
+// fresh, so it is never swept by mistake.
+const StaleTempAfter = 60 * time.Minute
+
+// Temp describes one temporary file found in a target directory.
+type Temp struct {
+	// Path is the full path of the temp file.
+	Path string
+	// Size is its byte size when observed.
+	Size int64
+	// ModTime is when it was last written.
+	ModTime time.Time
+}
+
+// ListTempFiles returns the rewrite temp files present in dir, oldest first. A
+// directory that cannot be read yields no files, which leaves a best-effort
+// cleanup with nothing to do about it.
+func ListTempFiles(dir string) []Temp {
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var temps []Temp
+	for _, de := range des {
+		if de.IsDir() || !strings.HasPrefix(de.Name(), TempPrefix) {
+			continue
+		}
+		fi, err := de.Info()
+		if err != nil {
+			continue
+		}
+		temps = append(temps, Temp{Path: filepath.Join(dir, de.Name()), Size: fi.Size(), ModTime: fi.ModTime()})
+	}
+	sort.SliceStable(temps, func(i, j int) bool {
+		if !temps[i].ModTime.Equal(temps[j].ModTime) {
+			return temps[i].ModTime.Before(temps[j].ModTime)
+		}
+		return temps[i].Path < temps[j].Path
+	})
+	return temps
+}
+
+// CleanStaleTemps removes the temp files in dir whose last write is at least
+// maxAge ago and returns the files it removed. It is deliberately best-effort:
+// a file that cannot be removed is reported through logf and skipped, and a
+// directory that cannot be read is a no-op. logf may be nil.
+func CleanStaleTemps(dir string, maxAge time.Duration, logf func(format string, args ...any)) []Temp {
+	now := time.Now()
+	var removed []Temp
+	for _, t := range ListTempFiles(dir) {
+		if now.Sub(t.ModTime) < maxAge {
+			continue
+		}
+		if err := os.Remove(t.Path); err != nil {
+			if logf != nil {
+				logf("stale temp not removed: %s (%s): %v", t.Path, probe.HumanBytes(t.Size), err)
+			}
+			continue
+		}
+		removed = append(removed, t)
+		if logf != nil {
+			logf("removed stale temp %s (%s, %.0f min old)",
+				t.Path, probe.HumanBytes(t.Size), now.Sub(t.ModTime).Minutes())
+		}
+	}
+	return removed
+}
 
 // Request describes one lossless rewrite.
 type Request struct {
@@ -82,7 +161,7 @@ func Transform(req Request) (*Outcome, error) {
 		targetDir = filepath.Dir(req.Input)
 	}
 
-	tmp, err := os.CreateTemp(targetDir, ".mp4norm-tmp-*")
+	tmp, err := os.CreateTemp(targetDir, TempPrefix+"*")
 	if err != nil {
 		in.Close()
 		return nil, err
