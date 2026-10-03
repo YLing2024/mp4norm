@@ -244,6 +244,7 @@ progress {
   border-radius: 999px;
   padding: 1px 9px;
   font-size: 12px;
+  font-weight: 500;
   white-space: nowrap;
 }
 .row-toggle { padding: 4px 10px; font-size: 12px; }
@@ -352,11 +353,11 @@ fieldset.setting .radio input { width: auto; }
 .file-row.tone-yellow { border-left-color: #fbbf24; }
 .file-row.tone-red    { border-left-color: #f87171; }
 
-.badge.tone-grey   { color: #c3ccd9; border-color: #4a5a72; background: rgba(154, 164, 178, 0.14); }
-.badge.tone-blue   { color: #93c5fd; border-color: #2f5f9e; background: rgba(59, 130, 246, 0.16); }
-.badge.tone-green  { color: #6ee7b7; border-color: #227a55; background: rgba(52, 211, 153, 0.14); }
-.badge.tone-yellow { color: #fcd34d; border-color: #8a6d1a; background: rgba(251, 191, 36, 0.16); }
-.badge.tone-red    { color: #fca5a5; border-color: #8a3030; background: rgba(248, 113, 113, 0.16); }
+.badge.tone-grey   { color: #d6dde8; border-color: #61748f; background: rgba(154, 164, 178, 0.24); }
+.badge.tone-blue   { color: #a5cdfd; border-color: #3b78c4; background: rgba(59, 130, 246, 0.26); }
+.badge.tone-green  { color: #7ff0c0; border-color: #2f9e6d; background: rgba(52, 211, 153, 0.24); }
+.badge.tone-yellow { color: #ffdc6b; border-color: #b08a1f; background: rgba(251, 191, 36, 0.26); }
+.badge.tone-red    { color: #ffb3b3; border-color: #b03c3c; background: rgba(248, 113, 113, 0.26); }
 
 .global-status.tone-blue  { color: #93c5fd; }
 .global-status.tone-green { color: #6ee7b7; }
