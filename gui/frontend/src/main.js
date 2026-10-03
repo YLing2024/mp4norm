@@ -254,6 +254,13 @@ const selectedRows = () =>
   state.files.filter((v) => state.selection[v.path] && v.status !== 'broken');
 const selectedCount = () => selectedRows().length;
 
+// fixButtonLabel never renders a count of zero: with nothing selected the
+// button is just the action, otherwise it names how many rows will run.
+function fixButtonLabel() {
+  const count = selectedCount();
+  return count > 0 ? t('btn.fix', { n: count }) : t('btn.fix.idle');
+}
+
 // ---- HTML -----------------------------------------------------------------
 
 function headerHTML() {
@@ -505,7 +512,7 @@ function settingsHTML() {
     </fieldset>
 
     <div class="row actions">
-      <button id="fix" class="btn primary big" data-act="fix"${canFix ? '' : ' disabled'}>${escapeHtml(t('btn.fix', { n: count }))}</button>
+      <button id="fix" class="btn primary big" data-act="fix"${canFix ? '' : ' disabled'}>${escapeHtml(fixButtonLabel())}</button>
       ${state.batch.running ? `<button class="btn" data-act="cancel">${t('btn.cancel')}</button>` : ''}
     </div>
   </div>`;
@@ -645,7 +652,7 @@ function refreshFixButton() {
   const btn = $('fix');
   if (!btn) return;
   const count = selectedCount();
-  btn.textContent = t('btn.fix', { n: count });
+  btn.textContent = fixButtonLabel();
   btn.disabled = state.scanning || state.batch.running || count === 0;
 }
 
