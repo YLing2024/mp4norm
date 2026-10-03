@@ -505,7 +505,7 @@ function settingsHTML() {
     </fieldset>
 
     <div class="row actions">
-      <button id="fix" class="btn primary big"${canFix ? '' : ' disabled'}>${escapeHtml(t('btn.fix', { n: count }))}</button>
+      <button id="fix" class="btn primary big" data-act="fix"${canFix ? '' : ' disabled'}>${escapeHtml(t('btn.fix', { n: count }))}</button>
       ${state.batch.running ? `<button class="btn" data-act="cancel">${t('btn.cancel')}</button>` : ''}
     </div>
   </div>`;
