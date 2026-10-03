@@ -339,3 +339,30 @@ fieldset.setting .radio input { width: auto; }
 .backup-table .col-actions { white-space: nowrap; }
 .backup-table .col-actions .btn { padding: 4px 9px; font-size: 12px; }
 .backup-confirm-hint { margin-top: 4px; font-size: 11px; max-width: 220px; }
+
+/* ---- Five-colour status system ----
+   Colour never carries information on its own: every tone is applied to an
+   element that already shows the state as text (the badge, the global status
+   line). Tones are: grey waiting/queued, blue in progress, green done or
+   nothing-to-do, yellow needs work, red failed or unprocessable. */
+
+.file-row.tone-grey   { border-left-color: #6b7a90; }
+.file-row.tone-blue   { border-left-color: #60a5fa; }
+.file-row.tone-green  { border-left-color: #34d399; }
+.file-row.tone-yellow { border-left-color: #fbbf24; }
+.file-row.tone-red    { border-left-color: #f87171; }
+
+.badge.tone-grey   { color: #c3ccd9; border-color: #4a5a72; background: rgba(154, 164, 178, 0.14); }
+.badge.tone-blue   { color: #93c5fd; border-color: #2f5f9e; background: rgba(59, 130, 246, 0.16); }
+.badge.tone-green  { color: #6ee7b7; border-color: #227a55; background: rgba(52, 211, 153, 0.14); }
+.badge.tone-yellow { color: #fcd34d; border-color: #8a6d1a; background: rgba(251, 191, 36, 0.16); }
+.badge.tone-red    { color: #fca5a5; border-color: #8a3030; background: rgba(248, 113, 113, 0.16); }
+
+.global-status.tone-blue  { color: #93c5fd; }
+.global-status.tone-green { color: #6ee7b7; }
+.global-status.tone-red   { color: #fca5a5; }
+
+.global-status progress::-webkit-progress-value { background: #60a5fa; }
+.global-status progress::-moz-progress-bar { background: #60a5fa; }
+
+.row-retry { padding: 4px 10px; font-size: 12px; }

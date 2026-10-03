@@ -270,19 +270,22 @@ function headerHTML() {
 
 // globalStatusHTML is the whole-scan / whole-run status above the list: streamed
 // discovery, real progress counts, and the completion summary with its actions.
+// It is a live region so a screen reader hears updates, but "off" while a scan
+// streams thousands of found-events so it is not flooded.
 function globalStatusHTML() {
   const b = state.batch;
+  const live = state.scanning ? 'off' : 'polite';
   if (state.scanning) {
     const text =
       state.scanPhase === 'check'
         ? t('scan.checking', { n: state.files.length })
         : t('scan.finding', { n: state.files.length });
-    return `<div class="global-status tone-blue" id="global-status">${escapeHtml(text)}</div>`;
+    return `<div class="global-status tone-blue" id="global-status" role="status" aria-live="${live}">${escapeHtml(text)}</div>`;
   }
   if (b.running) {
     const done = b.done + b.failed;
     return `
-      <div class="global-status tone-blue" id="global-status">
+      <div class="global-status tone-blue" id="global-status" role="status" aria-live="${live}">
         <div>${escapeHtml(t('progress.current', { index: b.currentIndex, total: b.total, name: b.currentName }))}</div>
         <progress id="run-progress" max="${Math.max(b.total, 1)}" value="${done}"></progress>
         <div class="muted">${escapeHtml(t('progress.done', { done, total: b.total }))}</div>
@@ -298,7 +301,7 @@ function globalStatusHTML() {
     });
     const failed = state.lastRun ? state.lastRun.failedPaths : [];
     return `
-      <div class="global-status tone-${b.failed > 0 ? 'red' : 'green'}" id="global-status">
+      <div class="global-status tone-${b.failed > 0 ? 'red' : 'green'}" id="global-status" role="status" aria-live="${live}">
         <div>${escapeHtml(line)}</div>
         <div class="row">
           ${failed.length ? `<button class="btn" data-act="retry-failed">${t('btn.retryFailed', { n: failed.length })}</button>` : ''}
@@ -307,11 +310,11 @@ function globalStatusHTML() {
       </div>`;
   }
   if (state.files.length) {
-    return `<div class="global-status" id="global-status"><span class="muted">${escapeHtml(
+    return `<div class="global-status" id="global-status" role="status" aria-live="${live}"><span class="muted">${escapeHtml(
       t('list.count', { total: state.files.length, selected: selectedCount() }),
     )}</span></div>`;
   }
-  return `<div class="global-status" id="global-status"></div>`;
+  return `<div class="global-status" id="global-status" role="status" aria-live="${live}"></div>`;
 }
 
 function fileListHTML() {
