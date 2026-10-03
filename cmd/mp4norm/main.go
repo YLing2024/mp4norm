@@ -268,7 +268,7 @@ func printScanReport(w io.Writer, target string, vs []classify.Verdict, needsWor
 	fmt.Fprintf(w, "共 %d 个：%d 个建议规整 / %d 个无需处理 / %d 个无法处理\n",
 		len(vs), needsWork, ok, broken)
 	if needsWork > 0 {
-		fmt.Fprintln(w, "下一步：mp4norm batch -outdir <输出目录> <目录>      批量规整")
+		fmt.Fprintln(w, "下一步：mp4norm fix -outdir <输出目录> <目录>      规整这些文件")
 	}
 }
 
@@ -421,7 +421,10 @@ func runFix(args []string) error {
 			if err != nil {
 				return err
 			}
-			return runTransform(raw[0], spec, fn, fragmented)
+			if err := runTransform(raw[0], spec, fn, fragmented); err != nil {
+				return reencodeAdvice(err)
+			}
+			return nil
 		}
 	}
 
@@ -634,6 +637,14 @@ func runReencode(args []string) error {
 	return nil
 }
 
+// reencodeAdvice wraps a lossless-fix failure with a pointer to the separate
+// `reencode` command. Some files (very sparse keyframes, VFR) cannot be fixed
+// by container surgery alone and need a real re-encode, which is deliberately
+// not folded into `fix`.
+func reencodeAdvice(err error) error {
+	return fmt.Errorf("%w\n  if this file cannot be fixed without re-encoding (e.g. very sparse keyframes or VFR), try: mp4norm reencode <file>", err)
+}
+
 // batchSettings carries the resolved options for a multi-file lossless rewrite.
 type batchSettings struct {
 	cmd       string // command name used in error messages
@@ -704,7 +715,7 @@ func runConcurrent(inputs []string, s batchSettings, fn transformFunc, fragmente
 	for _, r := range results {
 		if r.err != nil {
 			failCount++
-			fmt.Fprintf(os.Stderr, "fail %s: %v\n", r.in, r.err)
+			fmt.Fprintf(os.Stderr, "fail %s: %v\n", r.in, reencodeAdvice(r.err))
 			continue
 		}
 		okCount++
@@ -986,20 +997,25 @@ Usage:
   mp4norm <command> [arguments]
 
 Commands:
+  check [-v] [-needs-work] [-json] <file|dir...>
+                                     Check files and folders and say, in plain language,
+                                     which files are fine, which are worth fixing, and
+                                     which are broken. Exit code 0/1/2 = clean/needs
+                                     work/broken.
+  fix [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-jobs n]
+      [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <file|dir...>
+                                     Fix (losslessly rewrite) any number of files and/or
+                                     folders in one go: one file is the same flow as a
+                                     whole folder. -in-place replaces each input after
+                                     backing it up and is mutually exclusive with -outdir;
+                                     -backup-dir requires -in-place.
+
+Advanced commands:
   probe <file>                       Inspect an MP4's container layout and report problems
-  scan [-v] [-needs-work] [-json] <dir|file...>
-                                     Scan a folder and say, in plain language, which files
-                                     are fine, which are worth normalizing, and which are
-                                     broken. Exit code 0/1/2 = clean/needs work/broken.
-  normalize [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-o out] [-in-place] [-backup-dir dir] <input>
-                                     Move moov to the front and interleave (progressive),
-                                     or write a fragmented MP4 with sidx (fmp4). Lossless.
-                                     -in-place replaces the input (a backup is kept); it is
-                                     mutually exclusive with -o.
   faststart [-o out] [-in-place] [-backup-dir dir] <input>
                                      Only move moov to the front (lossless, no re-encode)
-  batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <input...|dir...>
-                                     Normalize many files or directories in parallel
+  reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
+                                     Optional re-encode to fix sparse keyframes / VFR
   backups <directory>                List the backups stored for a directory
   restore [-backup-dir dir] <file>   Put a file's newest backup back in place
   forget [-backup-dir dir] --yes <file>
@@ -1015,8 +1031,6 @@ Commands:
                                      are mutually exclusive; -once runs a single observation
                                      round and exits with scan-style codes (0/1/2) - run it
                                      twice to observe, then process.
-  reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
-                                     Optional re-encode to fix sparse keyframes / VFR
   version                            Print the version
   help                               Show this help
 
