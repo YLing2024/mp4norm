@@ -68,12 +68,12 @@ func run(args []string) error {
 		return runScan(args[1:])
 	case "faststart":
 		return runFaststart(args[1:])
-	case "normalize":
-		return runNormalize(args[1:])
+	case "fix", "normalize", "batch":
+		// `normalize` and `batch` are hidden aliases kept so old docs and
+		// scripts keep working; `fix` is the documented command.
+		return runFix(args[1:])
 	case "reencode":
 		return runReencode(args[1:])
-	case "batch":
-		return runBatch(args[1:])
 	case "backups":
 		return runBackups(args[1:])
 	case "restore":
@@ -377,29 +377,70 @@ func runFaststart(args []string) error {
 	return runTransform(in, spec, normalize.Faststart, false)
 }
 
-func runNormalize(args []string) error {
-	fs := flag.NewFlagSet("normalize", flag.ContinueOnError)
-	out := fs.String("o", "", "output file (default: <input>.norm.mp4)")
+// runFix is the unified lossless entry point. It accepts any number of files
+// and/or directories and applies the same container rewrite to every input, so
+// there is no separate "single file" and "batch" mode. A single explicitly
+// named file takes the one-shot path (the only one that honours -o); anything
+// else is expanded and run through the concurrent engine. The legacy
+// `normalize` and `batch` commands are hidden aliases of this one.
+func runFix(args []string) error {
+	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
+	out := fs.String("o", "", "output file (single file only; default: <input>.norm.mp4)")
 	format := fs.String("format", "progressive", "output format: progressive or fmp4")
 	window := fs.Int("window", 1000, "interleave window in milliseconds (progressive)")
 	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
+	jobs := fs.Int("jobs", runtime.NumCPU(), "parallel workers")
+	outdir := fs.String("outdir", "", "output directory (default: next to each input)")
+	suffix := fs.String("suffix", ".norm.mp4", "output filename suffix")
 	inPlace, backupDir := outputModeFlags(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
-	in, err := requireOneArg(fs, "normalize")
-	if err != nil {
-		return err
+	raw := fs.Args()
+	if len(raw) == 0 {
+		return fmt.Errorf("fix: missing <file|dir...>")
 	}
-	spec, err := buildSpec("normalize", in, *out, ".norm.mp4", *inPlace, *backupDir)
-	if err != nil {
-		return err
+	if *inPlace && (*outdir != "" || *out != "") {
+		return fmt.Errorf("fix: -in-place is mutually exclusive with -outdir and -o")
+	}
+	if !*inPlace && *backupDir != "" {
+		return fmt.Errorf("fix: -backup-dir requires -in-place")
 	}
 	fn, fragmented, err := normalizeFunc(*format, *window, *fragMs)
 	if err != nil {
 		return err
 	}
-	return runTransform(in, spec, fn, fragmented)
+
+	// One explicitly named file with default placement keeps the one-shot
+	// path; a directory, a mix, or -outdir goes through the concurrent engine.
+	if len(raw) == 1 && *outdir == "" {
+		if fi, statErr := os.Stat(raw[0]); statErr == nil && !fi.IsDir() {
+			spec, err := buildSpec("fix", raw[0], *out, *suffix, *inPlace, *backupDir)
+			if err != nil {
+				return err
+			}
+			return runTransform(raw[0], spec, fn, fragmented)
+		}
+	}
+
+	inputs, err := collectInputs(raw)
+	if err != nil {
+		return err
+	}
+	if len(inputs) == 0 {
+		return fmt.Errorf("fix: no input files")
+	}
+	if *out != "" {
+		return fmt.Errorf("fix: -o requires a single input file")
+	}
+	return runConcurrent(inputs, batchSettings{
+		cmd:       "fix",
+		jobs:      *jobs,
+		outdir:    *outdir,
+		suffix:    *suffix,
+		inPlace:   *inPlace,
+		backupDir: *backupDir,
+	}, fn, fragmented)
 }
 
 // outputModeFlags registers the in-place output mode shared by the lossless
@@ -589,39 +630,6 @@ func runReencode(args []string) error {
 	}
 	fmt.Print(rep.String())
 	return nil
-}
-
-func runBatch(args []string) error {
-	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
-	jobs := fs.Int("jobs", runtime.NumCPU(), "parallel workers")
-	format := fs.String("format", "progressive", "output format: progressive or fmp4")
-	window := fs.Int("window", 1000, "interleave window in milliseconds (progressive)")
-	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
-	outdir := fs.String("outdir", "", "output directory (default: next to each input)")
-	suffix := fs.String("suffix", ".norm.mp4", "output filename suffix")
-	inPlace, backupDir := outputModeFlags(fs)
-	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
-		return err
-	}
-	inputs, err := collectInputs(fs.Args())
-	if err != nil {
-		return err
-	}
-	if len(inputs) == 0 {
-		return fmt.Errorf("batch: no input files")
-	}
-	fn, fragmented, err := normalizeFunc(*format, *window, *fragMs)
-	if err != nil {
-		return err
-	}
-	return runConcurrent(inputs, batchSettings{
-		cmd:       "batch",
-		jobs:      *jobs,
-		outdir:    *outdir,
-		suffix:    *suffix,
-		inPlace:   *inPlace,
-		backupDir: *backupDir,
-	}, fn, fragmented)
 }
 
 // batchSettings carries the resolved options for a multi-file lossless rewrite.
