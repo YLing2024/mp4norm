@@ -112,6 +112,7 @@ const STRINGS = {
 
     // Primary + row actions
     'btn.fix': '修复这 {n} 个文件',
+    'btn.fix.idle': '修复',
     'btn.cancel': '中止',
     'btn.retry': '重试',
     'btn.retryFailed': '重试失败的 {n} 个',
@@ -307,6 +308,7 @@ const STRINGS = {
     'output.namerule.keep': 'Keep name',
 
     'btn.fix': 'Fix {n} file(s)',
+    'btn.fix.idle': 'Fix',
     'btn.cancel': 'Stop',
     'btn.retry': 'Retry',
     'btn.retryFailed': 'Retry the {n} failed',
@@ -483,6 +485,7 @@ const STRINGS = {
     'output.namerule.suffix': '保留原名 + 後綴',
     'output.namerule.keep': '保留原名',
     'btn.fix': '修復這 {n} 個檔案',
+    'btn.fix.idle': '修復',
     'btn.cancel': '中止',
     'btn.retry': '重試',
     'btn.retryFailed': '重試失敗的 {n} 個',
@@ -650,6 +653,7 @@ const STRINGS = {
     'output.namerule.suffix': '元の名前 + 接尾辞',
     'output.namerule.keep': '元の名前を保持',
     'btn.fix': '{n} 個のファイルを修復',
+    'btn.fix.idle': '修復',
     'btn.cancel': '中止',
     'btn.retry': '再試行',
     'btn.retryFailed': '失敗した {n} 個を再試行',
@@ -817,6 +821,7 @@ const STRINGS = {
     'output.namerule.suffix': '원래 이름 + 접미사',
     'output.namerule.keep': '원래 이름 유지',
     'btn.fix': '파일 {n}개 복구',
+    'btn.fix.idle': '복구',
     'btn.cancel': '중지',
     'btn.retry': '재시도',
     'btn.retryFailed': '실패한 {n}개 재시도',
