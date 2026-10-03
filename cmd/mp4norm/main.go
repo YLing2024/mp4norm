@@ -991,48 +991,44 @@ func isBoolFlag(f *flag.Flag) bool {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, `mp4norm - normalize MP4 container layout for fast open and seek
+	fmt.Fprint(w, `mp4norm - 规整 MP4 容器的排布，让文件快速打开、拖动顺畅
 
-Usage:
-  mp4norm <command> [arguments]
+用法：
+  mp4norm <命令> [参数]
 
-Commands:
-  check [-v] [-needs-work] [-json] <file|dir...>
-                                     Check files and folders and say, in plain language,
-                                     which files are fine, which are worth fixing, and
-                                     which are broken. Exit code 0/1/2 = clean/needs
-                                     work/broken.
+命令：
+  check [-v] [-needs-work] [-json] <文件|目录...>
+                                     检查文件和目录，用人话说清哪些文件正常、
+                                     哪些值得规整、哪些已经损坏。
+                                     退出码 0/1/2 = 无需处理/建议规整/无法处理。
   fix [-format progressive|fmp4] [-window ms] [-frag-ms ms] [-jobs n]
-      [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <file|dir...>
-                                     Fix (losslessly rewrite) any number of files and/or
-                                     folders in one go: one file is the same flow as a
-                                     whole folder. -in-place replaces each input after
-                                     backing it up and is mutually exclusive with -outdir;
-                                     -backup-dir requires -in-place.
+      [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <文件|目录...>
+                                     修复（无损重写）任意数量的文件和/或目录：
+                                     单个文件与整个目录走同一条流程。-in-place
+                                     会在备份后替换原文件，且与 -outdir（以及
+                                     -o）互斥；-backup-dir 需要配合 -in-place 使用。
 
-Advanced commands:
-  probe <file>                       Inspect an MP4's container layout and report problems
+高级命令：
+  probe <file>                       检查 MP4 的容器排布并报告问题
   faststart [-o out] [-in-place] [-backup-dir dir] <input>
-                                     Only move moov to the front (lossless, no re-encode)
+                                     只把 moov 移到文件开头（无损，不重新编码）
   reencode [-vcodec h264|h265|copy] [-hw auto|on|off] [-crf n] [-gop sec] [-o out] <input>
-                                     Optional re-encode to fix sparse keyframes / VFR
-  backups <directory>                List the backups stored for a directory
-  restore [-backup-dir dir] <file>   Put a file's newest backup back in place
+                                     可选的重编码，用于修复关键帧稀疏 / VFR
+  backups <directory>                列出某个目录下保存的备份
+  restore [-backup-dir dir] <file>   把文件最新的一份备份放回原位
   forget [-backup-dir dir] --yes <file>
-                                     Delete a file's backups (without --yes, just list them)
-  tmp <directory...>                 List leftover temp files from an interrupted run
+                                     删除某个文件的备份（不加 --yes 时只列出）
+  tmp <directory...>                 列出中断残留的临时文件
   watch [-interval 5m] [-outdir dir] [-in-place] [-backup-dir dir] [-once] [-quiet] <dir...>
-                                     Poll folders and normalize new files once they stop
-                                     being written. The first round is a baseline
-                                     observation pass: files are recorded and left alone,
-                                     and processing starts from the second round on.
-                                     A file that is still changing is reported as writing,
-                                     never as failed. -in-place (with a backup) and -outdir
-                                     are mutually exclusive; -once runs a single observation
-                                     round and exits with scan-style codes (0/1/2) - run it
-                                     twice to observe, then process.
-  version                            Print the version
-  help                               Show this help
+                                     轮询目录，等新文件停止写入后再规整。第一轮
+                                     只做基线观察：记录文件后放着不动，从第二轮
+                                     起才开始处理。仍在变化的文件记为 writing，
+                                     绝不记为失败。-in-place（带备份）与 -outdir
+                                     互斥；-once 只跑一轮观察并以 scan 风格的
+                                     退出码（0/1/2）退出——需要跑两次才能
+                                     「先观察、再处理」。
+  version                            打印版本号
+  help                               显示本帮助
 
 `)
 }
