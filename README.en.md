@@ -68,17 +68,27 @@ about 16 s.
 CLI:
 
 ```
+mp4norm check <file|dir...>          # check only, change nothing; a plain-language verdict per file
+mp4norm fix <file|dir...>            # fix (lossless rewrite): files, folders, any number, any mix
+mp4norm fix -format fmp4 <file|dir>  # write a fragmented MP4 with sidx (lossless)
 mp4norm probe <file>                 # diagnose the container layout
-mp4norm normalize <input>            # faststart + interleave (lossless)
-mp4norm normalize -format fmp4 <in>  # fragmented MP4 with sidx (lossless)
 mp4norm faststart <input>            # only move moov to the front
 mp4norm reencode -crf 23 <input>     # optional re-encode (fix sparse keyframes / VFR)
 mp4norm tmp <dir...>                 # list leftover temp files (`.mp4norm-tmp-*`) and their sizes
 ```
 
-Common flags: `-o <out>` output path, `-window <ms>` interleave window,
-`-frag-ms <ms>` fragment duration, `-vcodec h264|h265|copy`, `-hw auto|on|off`,
-`-gop <sec>` keyframe interval.
+`check` and `fix` are the only two everyday commands: **there is no separate
+"single-file mode" and "batch mode"** — `fix` takes files and folders, any
+number, in any mix, and one file goes through exactly the same flow as a whole
+folder. The old `scan` (alias of `check`) and `normalize` / `batch` (aliases of
+`fix`) still work; they just no longer appear in the help.
+
+Common `fix` flags: `-format progressive|fmp4`, `-window <ms>` interleave
+window, `-frag-ms <ms>` fragment duration, `-jobs n` parallel workers,
+`-outdir <dir>` output directory, `-suffix <s>` output suffix, `-in-place`
+(replace each input, keeping a backup), `-backup-dir <dir>` backup directory;
+`-o <out>` sets the output path when fixing a single file. `-in-place` is
+mutually exclusive with `-outdir` (and `-o`); `-backup-dir` requires `-in-place`.
 
 If the process is killed mid-rewrite (Task Manager end task, forced window
 close), it can leave a `.mp4norm-tmp-*` file behind. Before each rewrite the
@@ -86,15 +96,16 @@ target directory's residue older than **60 minutes** is swept automatically and
 logged (a concurrently running instance's temp file is fresh and never swept);
 `mp4norm tmp <dir>` shows what is currently there.
 
-Batch detection (the recommended entry point) — scan a folder and get a
-plain-language verdict per file:
+Use `check` first to see which files in a folder actually need work:
 
 ```
-mp4norm scan <dir|file...>         # human-readable table
-mp4norm scan <dir> --needs-work    # only the files that need work
-mp4norm scan <dir> --json          # machine-readable
-mp4norm scan <dir> -v              # include raw fields (brand / moov position / mdat boxes)
+mp4norm check <dir|file...>        # human-readable table
+mp4norm check <dir> --needs-work   # only the files that need work
+mp4norm check <dir> --json         # machine-readable
+mp4norm check <dir> -v             # include raw fields (brand / moov position / mdat boxes)
 ```
+
+(`scan` is a compatibility alias of `check`, with identical behavior.)
 
 Three verdicts only:
 
@@ -104,11 +115,13 @@ Three verdicts only:
 
 Exit codes: `0` nothing to do / `1` some files need work / `2` some files are broken — convenient for scripting.
 
-`batch` normalizes many files or directories in parallel:
+`fix` handles files or folders, any number, in parallel with one command:
 
-``` 
-mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
 ```
+mp4norm fix [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <file|dir...>
+```
+
+(`normalize` / `batch` are compatibility aliases of `fix`; old scripts keep working unchanged.)
 
 `watch` polls folders and normalizes new files once they have stopped being written:
 
@@ -182,10 +195,11 @@ windows/amd64.
 
 ## Status
 
-Working: probe, lossless faststart, interleaving, fMP4 + sidx, optional ffmpeg
-re-encode with hardware-encoder detection, parallel batch CLI, and a Wails
-desktop UI (switchable between Chinese and English) — with cross-platform CI and
-a tag-driven release workflow.
+Working: the unified `check` / `fix` CLI (files and folders mixed freely,
+processed in parallel), probe, lossless faststart, interleaving, fMP4 + sidx,
+optional ffmpeg re-encode with hardware-encoder detection, and a Wails desktop
+UI (switchable between Chinese and English) — with cross-platform CI and a
+tag-driven release workflow.
 
 ## License
 

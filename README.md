@@ -69,26 +69,31 @@ mp4norm 走容器手术路径，1.2 GB 只要约 16 秒。
 CLI：
 
 ```
+mp4norm check <文件|目录...>          # 只检查，不改；人话表格告诉你每个文件要不要修
+mp4norm fix <文件|目录...>            # 修复（无损重写）：文件、目录、任意数量混着来都行
+mp4norm fix -format fmp4 <文件|目录>  # 输出带 sidx 的分片 MP4（无损）
 mp4norm probe <file>                 # 诊断容器布局
-mp4norm normalize <input>            # faststart + 交织（无损）
-mp4norm normalize -format fmp4 <in>  # 带 sidx 的分片 MP4（无损）
 mp4norm faststart <input>            # 只把 moov 移到文件开头
 mp4norm reencode -crf 23 <input>     # 可选重编码（修关键帧稀疏 / VFR）
 mp4norm tmp <目录...>                # 列出中断残留的临时文件（`.mp4norm-tmp-*`）及大小
 ```
 
-常用 flag：`-o <out>` 输出路径、`-window <ms>` 交织窗口、`-frag-ms <ms>` 分片时长、`-vcodec h264|h265|copy`、`-hw auto|on|off`、`-gop <sec>` 关键帧间隔。
+`check` 和 `fix` 是仅有的两个日常命令：**没有单独的“单文件模式”和“批量模式”**——`fix` 同时接受文件和目录、任意数量、随意混合，单个文件走的就是和整个文件夹完全相同的那条流程。旧命令 `scan`（`check` 的别名）和 `normalize` / `batch`（`fix` 的别名）仍然可用，只是不再出现在帮助里。
+
+`fix` 的常用 flag：`-format progressive|fmp4`、`-window <ms>` 交织窗口、`-frag-ms <ms>` 分片时长、`-jobs n` 并行数、`-outdir <dir>` 输出目录、`-suffix <s>` 输出后缀、`-in-place`（替换原文件，自动备份）、`-backup-dir <dir>` 备份目录；仅处理单个文件时还可用 `-o <out>` 指定输出路径。`-in-place` 与 `-outdir`（以及 `-o`）互斥；`-backup-dir` 需要配合 `-in-place`。
 
 规整过程中若进程被强杀（任务管理器结束进程、关窗口强退），可能留下 `.mp4norm-tmp-*` 临时文件。下一次规整开始前会自动清理目标目录中 **mtime 超过 60 分钟** 的陈旧残留并打印日志（正在运行的其它实例的临时文件较新，不会被误删）；`mp4norm tmp <目录>` 可随时查看残留。
 
-批量检测（推荐入口）—— 扫描一个文件夹，直接告诉你**每个文件要不要处理**：
+用 `check` 先看看一个文件夹里**每个文件要不要处理**：
 
 ```
-mp4norm scan <目录|文件...>        # 人话表格：需要处理 / 无法处理 / 无需处理
-mp4norm scan <目录> --needs-work   # 只列出需要处理的（脚本化用）
-mp4norm scan <目录> --json         # 机器可读
-mp4norm scan <目录> -v             # 附带原始字段（brand / moov 位置 / mdat 块数）
+mp4norm check <目录|文件...>        # 人话表格：需要处理 / 无法处理 / 无需处理
+mp4norm check <目录> --needs-work   # 只列出需要处理的（脚本化用）
+mp4norm check <目录> --json         # 机器可读
+mp4norm check <目录> -v             # 附带原始字段（brand / moov 位置 / mdat 块数）
 ```
+
+（`scan` 是 `check` 的兼容别名，用法完全一致。）
 
 结论只有三种：
 
@@ -98,11 +103,13 @@ mp4norm scan <目录> -v             # 附带原始字段（brand / moov 位置 
 
 退出码：`0` 全部无需处理 / `1` 存在建议规整 / `2` 存在无法处理，方便脚本化。
 
-`batch` 可以并行处理多个文件或目录：
+`fix` 一条命令就能并行处理文件或目录、任意数量：
 
 ```
-mp4norm batch [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] <input...|dir...>
+mp4norm fix [-jobs n] [-format progressive|fmp4] [-outdir dir] [-suffix s] [-in-place] [-backup-dir dir] <文件|目录...>
 ```
+
+（`normalize` / `batch` 是 `fix` 的兼容别名，旧脚本无需修改。）
 
 `watch` 轮询目录，等文件**停止写入后**再规整：
 
@@ -156,7 +163,7 @@ CI（`.github/workflows/ci.yml`）在 Windows、macOS、Linux 上运行 vet、�
 
 ## 状态
 
-已可用：probe、无损 faststart、交织、fMP4 + sidx、带硬件编码器探测的可选 ffmpeg 重编码、并行 batch CLI，以及 Wails 桌面界面（支持中英文切换）——并配有跨平台 CI 和 tag 触发的 release 工作流。
+已可用：统一的 `check` / `fix` CLI（文件/目录任意混合、并行处理）、probe、无损 faststart、交织、fMP4 + sidx、带硬件编码器探测的可选 ffmpeg 重编码，以及 Wails 桌面界面（支持中英文切换）——并配有跨平台 CI 和 tag 触发的 release 工作流。
 
 ## 许可证
 
