@@ -9,12 +9,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/YLing2024/mp4norm/internal/backup"
@@ -40,7 +42,7 @@ func main() {
 	if errors.As(err, &ec) {
 		os.Exit(ec.code)
 	}
-	fmt.Fprintln(os.Stderr, "mp4norm: error:", err)
+	fmt.Fprintln(os.Stderr, "mp4norm: 错误:", humanizeError(err))
 	os.Exit(1)
 }
 
@@ -49,6 +51,80 @@ func main() {
 type exitCodeError struct{ code int }
 
 func (e exitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+
+// humanizeError rewrites an error chain so no raw operating-system text (for
+// example "GetFileAttributesEx H:\...: The system cannot find the file
+// specified.") ever reaches the user. Our own errors are already Chinese; this
+// only replaces the low-level leaves and splices the translation back into the
+// surrounding context, so a prefix like "back up original: " is preserved.
+func humanizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if text, ok := osErrorText(err); ok {
+		return errors.New(text)
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		translated := humanizeError(cause)
+		if translated.Error() == cause.Error() {
+			return err
+		}
+		return errors.New(strings.Replace(err.Error(), cause.Error(), translated.Error(), 1))
+	}
+	return err
+}
+
+// osErrorText recognises the filesystem errors the standard library returns and
+// renders them in plain Chinese. It matches only the error value itself (not a
+// wrapped cause) so callers keep their own context.
+func osErrorText(err error) (string, bool) {
+	switch e := err.(type) {
+	case *fs.PathError:
+		return pathErrorText(e.Path, e.Err), true
+	case *os.LinkError:
+		return pathErrorText(e.Old, e.Err), true
+	case *os.SyscallError:
+		if text, ok := syscallErrorText(e.Err); ok {
+			return text, true
+		}
+		return "系统调用失败", true
+	case syscall.Errno:
+		if text, ok := syscallErrorText(e); ok {
+			return text, true
+		}
+		return "系统调用失败", true
+	}
+	return "", false
+}
+
+// pathErrorText names the file and the reason, never the raw Windows call.
+func pathErrorText(path string, cause error) string {
+	text, ok := syscallErrorText(cause)
+	if !ok {
+		text = "无法访问"
+	}
+	if path == "" {
+		return text
+	}
+	return text + "：" + path
+}
+
+// syscallErrorText maps the filesystem conditions a user can act on to plain
+// Chinese. Anything else is reported generically rather than leaking the OS
+// wording.
+func syscallErrorText(err error) (string, bool) {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "找不到文件", true
+	case errors.Is(err, fs.ErrPermission):
+		return "没有权限读取", true
+	case errors.Is(err, fs.ErrExist):
+		return "目标已存在", true
+	case errors.Is(err, syscall.ENOSPC):
+		return "磁盘空间不足", true
+	}
+	return "", false
+}
 
 func run(args []string) error {
 	if len(args) == 0 {
@@ -132,7 +208,7 @@ func runScan(args []string) error {
 	files, bad := classify.Collect(inputs)
 	verdicts := classify.All(files)
 	for _, f := range bad {
-		verdicts = append(verdicts, classify.BrokenFromError(f.Path, f.Err))
+		verdicts = append(verdicts, classify.BrokenFromError(f.Path, humanizeError(f.Err)))
 	}
 	sort.SliceStable(verdicts, func(i, j int) bool {
 		if verdicts[i].Name != verdicts[j].Name {
@@ -887,7 +963,7 @@ func collectInputs(args []string) ([]string, error) {
 	for _, a := range args {
 		fi, err := os.Stat(a)
 		if err != nil {
-			return nil, err
+			return nil, humanizeError(err)
 		}
 		if !fi.IsDir() {
 			inputs = append(inputs, a)
@@ -907,7 +983,7 @@ func collectInputs(args []string) ([]string, error) {
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, humanizeError(err)
 		}
 	}
 	return inputs, nil

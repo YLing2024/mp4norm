@@ -57,7 +57,7 @@ func runWatch(args []string) error {
 	for _, root := range roots {
 		fi, err := os.Stat(root)
 		if err != nil {
-			return err
+			return humanizeError(err)
 		}
 		if !fi.IsDir() {
 			return fmt.Errorf("watch: %s 不是目录", root)
