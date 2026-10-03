@@ -17,7 +17,7 @@ body {
 }
 
 #app {
-  max-width: 920px;
+  max-width: 1040px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -26,31 +26,15 @@ header {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: 10px;
 }
 header h1 { margin: 0; font-size: 22px; }
+header #ffmpeg { margin-left: 2px; }
 
-.lang-switch {
+.lang-select {
   margin-left: auto;
   align-self: center;
-  display: flex;
-  gap: 4px;
-}
-.lang-btn {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px 9px;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.lang-btn:hover { color: var(--fg); }
-.lang-btn.active {
-  color: var(--fg);
-  border-color: var(--accent);
-  background: rgba(59, 130, 246, 0.18);
+  width: auto;
 }
 
 .muted { color: var(--muted); font-weight: 400; font-size: 12px; }
@@ -70,7 +54,6 @@ header h1 { margin: 0; font-size: 22px; }
   font-weight: 400;
   line-height: 1.4;
 }
-.card h2 .sub strong { color: var(--fg); font-weight: 600; }
 
 .row {
   display: flex;
@@ -80,6 +63,7 @@ header h1 { margin: 0; font-size: 22px; }
   margin-bottom: 8px;
 }
 .row:last-child { margin-bottom: 0; }
+.row.center { justify-content: center; }
 
 label {
   display: flex;
@@ -89,12 +73,10 @@ label {
   color: var(--muted);
 }
 
-/* A labelled field with a plain-language hint underneath. */
 .field { position: relative; flex: 1 1 230px; min-width: 0; }
 .field input[readonly] { flex: none; width: 100%; min-width: 0; }
+.field[hidden] { display: none; }
 
-/* Grey hint line shown under every field (never a title attribute, so it is
-   visible on touch devices too). */
 .hint {
   display: block;
   max-width: 340px;
@@ -144,22 +126,6 @@ details.info .info-pop {
 details.info:hover .info-pop,
 details.info[open] .info-pop { display: block; }
 
-/* Sections nested inside the collapsible single-file card. */
-.subpane {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-.subpane h3 { margin: 0 0 8px; font-size: 13px; }
-details.subdetails {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-details.subdetails > summary { cursor: pointer; user-select: none; }
-details.subdetails > summary > h3 { margin: 0 0 8px; font-size: 13px; }
-
-/* Advanced options inside an otherwise simple card. */
 details.advanced {
   margin-top: 10px;
   border-top: 1px solid var(--border);
@@ -173,7 +139,6 @@ details.advanced > summary {
 }
 details.advanced[open] > summary { margin-bottom: 10px; }
 
-/* The whole Re-encode card collapses into a summary. */
 details.card > summary.card-summary {
   cursor: pointer;
   user-select: none;
@@ -190,7 +155,7 @@ input, select {
   padding: 7px 9px;
   font: inherit;
 }
-input[readonly] { flex: 1; min-width: 260px; color: var(--muted); }
+input[readonly] { color: var(--muted); }
 input[type="number"] { width: 84px; }
 
 .btn {
@@ -206,6 +171,8 @@ input[type="number"] { width: 84px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); }
 .btn.primary:hover { background: #2f6fd8; }
 .btn.ghost { background: transparent; }
+.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.btn.big { min-width: 260px; padding: 10px 24px; font-weight: 600; }
 
 pre {
   margin: 0;
@@ -226,122 +193,94 @@ progress {
   margin-top: 6px;
 }
 
-/* ---- Batch list ---- */
+/* ---- Entry point ---- */
 
-#app { max-width: 1040px; }
-
-.batch-empty {
+.dropzone {
   border: 1px dashed var(--border);
-  border-radius: 8px;
-  padding: 26px 16px;
+  border-radius: 10px;
+  padding: 20px 16px;
   text-align: center;
-  color: var(--muted);
+  margin-bottom: 12px;
+}
+.dropzone-text { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+
+/* ---- Global status (scan / progress / summary) ---- */
+
+.global-status {
+  min-height: 20px;
+  margin-bottom: 10px;
   font-size: 13px;
 }
+.global-status progress { margin-top: 6px; }
 
-.field.inline { flex: 0 0 auto; }
-.field.inline select { width: auto; }
+/* ---- The one list ---- */
 
-/* Checkbox rendered inline next to its text. */
-.field.checkbox { flex-direction: row; align-items: center; gap: 6px; align-self: end; }
-.field.checkbox > span:first-child { display: none; }
-.field.checkbox input { width: auto; }
+.file-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.file-list:empty { margin-bottom: 0; }
 
-/* One toolbar row: filter controls and the file count stay on the left, while
-   margin-left:auto pushes the primary action to the right end. */
-.batch-toolbar { align-items: end; }
-.batch-count { align-self: center; }
-.batch-toolbar #batch-normalize { margin-left: auto; min-width: 220px; padding: 9px 22px; font-weight: 600; }
-
-.batch-table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
-  margin-top: 12px;
-  font-size: 13px;
+.file-row {
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.12);
 }
-/* Proportional column widths keep the layout stable before and after a batch
-   run. Long verdict/reason/status text wraps inside its own column instead of
-   squeezing the others. */
-.batch-table .w-name { width: 24%; }
-.batch-table .w-size { width: 8%; }
-.batch-table .w-verdict { width: 13%; }
-.batch-table .w-reason { width: 37%; }
-.batch-table .w-status { width: 18%; }
-.batch-table th,
-.batch-table td {
-  overflow-wrap: anywhere;
-  word-break: break-word;
+.file-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
 }
-.batch-table th {
-  text-align: left;
-  color: var(--muted);
-  font-weight: 500;
-  font-size: 12px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
-}
-.batch-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid rgba(51, 65, 90, 0.5);
-  vertical-align: top;
-}
-.batch-row { cursor: pointer; }
-.batch-row:hover { background: rgba(255, 255, 255, 0.03); }
-
-.col-name {
+.file-main .row-check { width: auto; }
+.row-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.col-size { white-space: nowrap; }
-/* Numeric column: right-align header and cells so sizes line up for comparison. */
-.batch-table th.col-size,
-.batch-table td.col-size { text-align: right; }
-.col-verdict, .col-reason, .col-state { white-space: normal; }
-.col-state { color: var(--muted); }
-
-.verdict-ok .col-verdict { color: #34d399; }
-.verdict-needs_work .col-verdict { color: #fbbf24; }
-.verdict-broken .col-verdict { color: #f87171; }
-
-.batch-details td { background: rgba(0, 0, 0, 0.15); }
-.batch-details pre { color: var(--muted); }
-
-.batch-progress-text { margin-top: 4px; font-size: 12px; }
-
-.retry-btn {
-  margin-left: 6px;
-  padding: 2px 8px;
-  font-size: 11px;
-  vertical-align: baseline;
+.badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 12px;
+  white-space: nowrap;
 }
+.row-toggle { padding: 4px 10px; font-size: 12px; }
 
-.btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.file-detail {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.15);
+}
+.detail-body { margin-bottom: 6px; }
+.detail-line { font-size: 12.5px; margin-bottom: 3px; overflow-wrap: anywhere; }
+.detail-key { color: var(--muted); margin-right: 6px; }
+.detail-line code { font: 12px/1.5 ui-monospace, Consolas, monospace; }
+pre.gain { color: #34d399; margin: 8px 0; }
 
-/* ---- Output mode + in-place warning ---- */
+/* ---- Settings (one block, any file count) ---- */
 
-fieldset.output-mode {
+.settings { display: flex; flex-direction: column; gap: 12px; }
+
+fieldset.setting {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px 10px;
   margin: 0;
-  flex: 1 1 100%;
 }
-fieldset.output-mode legend {
+fieldset.setting legend {
   color: var(--muted);
   font-size: 12px;
   padding: 0 4px;
 }
-/* Radio row on top; the field the choice controls sits indented underneath so
-   the two read as one setting inside a single border. */
-fieldset.output-mode .mode-radios {
+fieldset.setting .radios {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 16px;
 }
-fieldset.output-mode .radio {
+fieldset.setting .radio {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
@@ -349,14 +288,16 @@ fieldset.output-mode .radio {
   color: var(--fg);
   font-size: 13px;
 }
-fieldset.output-mode .radio input { width: auto; }
-fieldset.output-mode .mode-fields {
+fieldset.setting .radio input { width: auto; }
+.process-fields, .mode-fields {
   margin-top: 10px;
   padding-left: 12px;
   border-left: 2px solid var(--border);
 }
-fieldset.output-mode .mode-fields > .row:last-child { margin-bottom: 0; }
-fieldset.output-mode .mode-fields > .warning-banner { margin-bottom: 0; }
+.process-fields > .row:last-child, .mode-fields > .row:last-child { margin-bottom: 0; }
+.process-fields details.advanced { margin-top: 8px; }
+
+.actions { margin-top: 2px; align-items: center; }
 
 .warning-banner {
   background: rgba(251, 191, 36, 0.14);
@@ -398,6 +339,3 @@ fieldset.output-mode .mode-fields > .warning-banner { margin-bottom: 0; }
 .backup-table .col-actions { white-space: nowrap; }
 .backup-table .col-actions .btn { padding: 4px 9px; font-size: 12px; }
 .backup-confirm-hint { margin-top: 4px; font-size: 11px; max-width: 220px; }
-
-/* Gain (before/after) block shown above a single-file report. */
-pre.gain { color: #34d399; margin-bottom: 10px; }

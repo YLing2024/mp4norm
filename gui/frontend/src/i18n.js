@@ -1,34 +1,70 @@
-// i18n.js — bilingual strings (zh default / en) and language persistence for the
-// mp4norm GUI. Static copy mirrors the spec's copy table exactly.
+// i18n.js — strings and language persistence for the mp4norm GUI.
+//
+// There is no "single file" vs "batch" vocabulary anywhere: N files are just a
+// list with N rows, and the copy never says "mode". Every visible state pairs a
+// colour with text (see style.css), so the wording here always names the state.
 
 const STORAGE_KEY = 'mp4norm.lang';
 const DEFAULT_LANG = 'zh';
-const LANGS = ['zh', 'en'];
+
+// LANGUAGES drives the header selector. label is shown as-is, never translated.
+export const LANGUAGES = [
+  { code: 'zh', label: '中文' },
+  { code: 'zh_Hant', label: '繁體中文' },
+  { code: 'en', label: 'English' },
+  { code: 'ja', label: '日本語' },
+  { code: 'ko', label: '한국어' },
+];
+const LANGS = LANGUAGES.map((l) => l.code);
 
 const STRINGS = {
   zh: {
     'app.name': 'mp4norm',
+    'info.aria': '详细说明',
+    'lang.aria': '语言',
 
-    // Header / file selection
+    // Header / ffmpeg
     'ffmpeg.checking': '正在检测 ffmpeg…',
     'ffmpeg.missing': '未找到 ffmpeg',
-    'input.placeholder': '选择 MP4 文件…',
-    'btn.choose': '选择文件…',
-    'btn.inspect': '检查',
-    'card.diagnosis': '诊断结果',
-    'info.aria': '详细说明',
-    'single.card': '单文件处理',
 
-    // Normalize card
-    'card.normalize': '无损规整',
-    'label.input': '视频文件',
+    // Entry point
+    'input.drop': '拖入视频或文件夹，或点下方按钮（可多选、可多次添加）',
+    'btn.chooseFiles': '选择文件…',
+    'btn.chooseFolder': '选择文件夹…',
+    'btn.rescan': '重新检测',
+    'btn.clear': '清空列表',
+    'btn.chooseDir': '选择…',
+
+    // The list
+    'list.count': '共 {total} 个视频 · 已选 {selected} 个',
+    'list.expand': '展开',
+    'list.collapse': '收起',
+    'list.select': '选择该文件',
+
+    // Per-file states. Colour is applied by tone; the text always names it.
+    'file.waiting': '等待检查',
+    'file.checking': '检查中…',
+    'file.ok': '无需处理',
+    'file.needs': '需要处理',
+    'file.broken': '无法处理',
+    'file.queued': '排队中',
+    'file.queued.pos': '排队中（第 {pos} 位）',
+    'file.running': '修复中…',
+    'file.done': '已完成',
+    'file.failed': '失败',
+    'file.skipped': '无需处理',
+
+    // Processing settings
+    'settings.process': '处理方式',
+    'settings.remux': '重排封装（无损、快）',
+    'settings.reencode': '重编码（改变编码/体积，慢）',
     'label.format': '输出格式',
     'opt.progressive': '普通 MP4（最通用）',
     'opt.fmp4': '分片 MP4（适合边下边播）',
     'hint.format': '普通 MP4 最通用；分片 MP4 适合边下边播',
     'info.format':
       '普通 MP4：最通用，本地播放、网页播放都合适。分片 MP4：适合边下边播、直播类场景。',
-    'label.output': '输出路径',
+    'advanced.norm': '高级选项（一般不用改）',
     'label.window': '交织窗口（毫秒）',
     'hint.window': '音频与视频交织的时间粒度，不确定就保持 1000',
     'info.window':
@@ -36,14 +72,6 @@ const STRINGS = {
     'label.frag': '分片时长（毫秒）',
     'hint.frag': '分片 MP4 每片时长，不确定就保持 2000',
     'info.frag': '每个分片装多少秒内容，只在选了「分片 MP4」时生效。不确定就保持 2000。',
-    'advanced.norm': '高级选项（一般不用改）',
-    'out.norm.placeholder': '输出路径（默认：<输入>.norm.mp4）',
-    'btn.saveas': '另存为…',
-    'btn.normalize': '开始规整',
-
-    // Re-encode card
-    'card.reencode': '重新编码（可选 · 高级）',
-    'card.reencode.sub': '重新压一遍，画质有损',
     'label.codec': '视频编码',
     'opt.codec.copy': '直接复制（copy）',
     'hint.codec': 'H.264 兼容最好，copy 只换容器、不重编码',
@@ -64,70 +92,53 @@ const STRINGS = {
     'label.gop': '关键帧间隔（GOP·秒）',
     'hint.gop': '关键帧间隔，推荐 2 秒',
     'info.gop': '每隔多久插入一个「可跳转点」。调小 → 拖动更精准、文件略大。推荐 2 秒。',
-    'out.reenc.placeholder': '输出路径（默认：<输入>.reenc.mp4）',
-    'btn.reencode': '开始重编码',
-    'card.log': '日志',
 
-    // Dynamic log
-    'log.ready': '就绪',
-    'log.selected': '已选择 {path}',
-    'log.noFile': '尚未选择文件',
-    'log.inspected': '检查完成',
-    'log.inspectFailed': '检查失败：{err}',
-    'log.normalizing': '正在规整…',
-    'log.normalizeFailed': '规整失败：{err}',
-    'log.reencoding': '正在重新编码…',
-    'log.reencodeFailed': '重新编码失败：{err}',
-    'log.done': '完成 → {path}',
+    // Output
+    'output.label': '输出方式',
+    'output.inplace': '原地替换（自动备份）',
+    'output.new': '输出到目录',
+    'output.inplace.hint': '替换原文件前会先自动备份。',
+    'output.inplace.warning':
+      '⚠️ 将直接替换原文件。原文件会先自动备份到「{dir}」，可在下方「备份管理」里恢复。',
+    'output.inplace.defaultDir': '各文件旁的 .mp4norm-backup',
+    'output.backupdir': '备份目录',
+    'output.backupdir.placeholder': '留空则备份到每个文件旁边的 .mp4norm-backup',
+    'output.outdir': '输出目录',
+    'output.outdir.placeholder': '留空则写到每个文件旁边',
+    'output.namerule': '文件名规则',
+    'output.namerule.suffix': '保留原名 + 后缀',
+    'output.namerule.keep': '保留原名',
 
-    // Batch list (the default entry point)
-    'batch.card': '检查并修复',
-    'btn.chooseFiles': '选择文件…',
-    'btn.chooseFolder': '选择文件夹…',
-    'btn.clear': '清空列表',
-    'btn.scan': '重新检测',
-    'btn.batchNormalize': '批量规整',
-    'btn.batchNormalize.count': '修复这 {n} 个文件',
+    // Primary + row actions
+    'btn.fix': '修复这 {n} 个文件',
     'btn.cancel': '中止',
     'btn.retry': '重试',
-    'btn.chooseOutdir': '选择…',
-    'batch.drop': '拖入文件或文件夹，或点上方按钮选择',
-    'batch.filter': '筛选',
-    'batch.filter.all': '全部',
-    'batch.filter.needs': '仅需处理',
-    'batch.filter.broken': '仅无法处理',
-    'batch.sortSize': '按大小排序',
-    'batch.count': '共 {total} 个文件 · {needs} 个需要修复',
-    'batch.col.file': '文件名',
-    'batch.col.size': '大小',
-    'batch.col.verdict': '结论',
-    'batch.col.reason': '原因',
-    'batch.col.status': '状态',
-    'batch.details': '详情',
-    'batch.outdir': '输出目录',
-    'batch.outdir.placeholder': '默认：与原文件同目录',
-    'batch.detail.path': '完整路径',
-    'batch.detail.rawError': '原始错误',
-    // Plain-language batch failure reasons. The raw error is kept in the
-    // detail block (batch.detail.rawError) for troubleshooting.
-    'batch.fail.reason.structure':
-      '失败：文件的数据块结构异常，无法安全规整（可尝试用重新编码处理）',
-    'batch.fail.reason.unreadable': '失败：文件无法读取（可能已被移动或删除）',
-    'batch.fail.reason.moov-missing': '失败：文件缺少索引（moov），无法处理',
-    'batch.fail.reason.unknown': '失败：{err}',
-    'batch.progress': '已完成 {done}/{total}',
-    'batch.progress.current': '正在修复 {index}/{total}：{name}',
-    'batch.summary': '成功 {ok} / 跳过 {skip} / 失败 {fail}',
-    'batch.summary.cancelled': '已中止：成功 {ok} / 跳过 {skip} / 失败 {fail}',
-    'batch.nothing': '没有需要处理的文件',
-    'batch.status.queued': '排队中',
-    'batch.status.running': '正在修复',
-    'batch.status.done': '完成',
-    'batch.status.failed': '失败',
-    'batch.status.skipped': '跳过',
-    'status.ok': '✅ 无需处理',
-    'status.needs_work': '⚠️ 建议规整',
-    'status.broken': '❌ 无法处理',
+    'btn.retryFailed': '重试失败的 {n} 个',
+    'btn.undo': '撤销这次修复',
+
+    // Global status
+    'scan.finding': '正在查找视频… 已找到 {n} 个',
+    'scan.checking': '正在检查… 已找到 {n} 个',
+    'progress.current': '正在修复 {index}/{total} · {name}',
+    'progress.done': '已完成 {done}/{total}',
+    'summary.done': '完成 · 成功 {ok} · 无需处理 {need} · 失败 {fail} · {saved}',
+    'summary.cancelled': '已中止 · 成功 {ok} · 无需处理 {need} · 失败 {fail} · {saved}',
+    'summary.saved': '节省 {size}',
+    'summary.grew': '增加 {size}',
+    'summary.nothing': '没有需要处理的文件',
+
+    // Row details
+    'detail.path': '完整路径',
+    'detail.reasons': '诊断',
+    'detail.probe': '封装信息',
+    'detail.rawError': '原始错误',
+    'fail.reason.structure':
+      '文件的数据块结构异常，无法安全重排（可尝试改用「重编码」）',
+    'fail.reason.unreadable': '文件无法读取（可能已被移动或删除）',
+    'fail.reason.moov-missing': '文件缺少索引（moov），无法处理',
+    'fail.reason.unknown': '{err}',
+
+    // Reasons (classification)
     'reason.moov-at-end': '索引在文件尾部：首次播放要读完整文件（约 {size}）才能出画面',
     'reason.mdat-fragmented': '数据碎片化（{n} 个数据块）：拖动进度条时播放器要在文件里来回跳',
     'reason.not-interleaved': '音视频未交织：声音和画面数据分开存，拖动卡顿',
@@ -138,29 +149,26 @@ const STRINGS = {
     'reason.no-ftyp': '未找到 ftyp 块：文件类型未声明',
     'reason.fragmented': '分片 MP4（存在 moof 块）',
     'reason.ok': '已规范',
-    'log.scanning': '正在检测 {n} 个文件…',
-    'log.scanned': '检测完成：{ok} 无需处理 / {needs} 建议规整 / {broken} 无法处理',
-    'log.scanFailed': '检测失败：{err}',
+
+    // Log
+    'log.ready': '就绪',
+    'log.noFile': '尚未选择文件',
     'log.cleared': '已清空列表',
-    'log.batchStart': '开始批量规整（{n} 个）…',
-    'log.batchDone': '批量规整结束：成功 {ok} / 失败 {fail}',
-    'log.batchRefreshed': '已重新检测处理结果，刷新结论与按钮计数',
-    'log.batchCancelled': '批量规整已中止',
-    'log.batchFailed': '批量规整失败：{err}',
+    'log.scanning': '正在查找 {n} 个位置的视频…',
+    'log.scanned': '查找完成：{ok} 无需处理 / {needs} 需要处理 / {broken} 无法处理',
+    'log.scanFailed': '查找失败：{err}',
+    'log.fixStart': '开始修复 {n} 个文件…',
+    'log.fixDone': '修复结束：成功 {ok} / 失败 {fail}',
+    'log.fixCancelled': '已中止修复',
+    'log.fixFailed': '修复失败：{err}',
     'log.retry': '重试 {name}…',
     'log.retryDone': '重试完成 → {name}',
     'log.retryFailed': '重试失败：{err}',
+    'log.undoDone': '已撤销：恢复 {restored} / 删除 {deleted} / 失败 {failed}',
+    'log.undoFailed': '撤销失败：{err}',
+    'log.backupListed': '备份列表已更新：{n} 份',
 
-    // Output mode (new file vs replace-in-place) and the backup manager.
-    'batch.mode.label': '输出方式',
-    'batch.mode.new': '生成新文件（推荐）',
-    'batch.mode.inplace': '替换原文件（自动备份）',
-    'batch.mode.hint': '替换模式会先自动备份原文件',
-    'batch.inplace.warning':
-      '⚠️ 将直接替换原文件。原文件会先自动备份到「{dir}」，可在「备份管理」里恢复。',
-    'batch.inplace.defaultDir': '各文件旁的 .mp4norm-backup',
-    'batch.inplace.backupdir': '备份目录',
-    'batch.inplace.backupdir.placeholder': '留空则备份到每个文件旁边的 .mp4norm-backup',
+    // Backup management
     'backup.card': '备份管理',
     'backup.card.sub': '查看、恢复或删除「替换原文件」时自动产生的备份',
     'backup.dir': '备份目录',
@@ -188,15 +196,13 @@ const STRINGS = {
     'backup.restored': '已恢复 {path}',
     'backup.restoreNote': '被覆盖的当前版本已另存为备份 {name}',
     'backup.failed': '备份操作失败：{err}',
-    'log.backupListed': '备份列表已更新：{n} 份',
 
-    // Before/after benefit numbers.
-    'gain.title': '✅ 已完成（无损，画质不变）',
+    // Benefit numbers
+    'gain.title': '无损完成（画质不变）',
     'gain.firstplay': '首次可播放需读取：约 {before} → 约 {after}',
     'gain.mdat': '数据碎片：{before} 块 → {after} 块',
     'gain.segments': '分片：{after} 段',
     'gain.size': '体积：{before} → {after}',
-    'gain.summary': '共 {n} 个文件，合计“首次可播放需读取”从约 {before} 降到约 {after}',
 
     // Report
     'report.file': '文件',
@@ -214,27 +220,46 @@ const STRINGS = {
 
   en: {
     'app.name': 'mp4norm',
+    'info.aria': 'Details',
+    'lang.aria': 'Language',
 
-    // Header / file selection
     'ffmpeg.checking': 'checking ffmpeg…',
     'ffmpeg.missing': 'ffmpeg not found',
-    'input.placeholder': 'choose an MP4 file…',
-    'btn.choose': 'Choose file…',
-    'btn.inspect': 'Inspect',
-    'card.diagnosis': 'Diagnosis',
-    'info.aria': 'Details',
-    'single.card': 'Single file',
 
-    // Normalize card
-    'card.normalize': 'Normalize',
-    'label.input': 'Video file',
+    'input.drop': 'Drop videos or folders here, or use the buttons below (many at once, again and again)',
+    'btn.chooseFiles': 'Choose files…',
+    'btn.chooseFolder': 'Choose folder…',
+    'btn.rescan': 'Re-scan',
+    'btn.clear': 'Clear list',
+    'btn.chooseDir': 'Choose…',
+
+    'list.count': '{total} video(s) · {selected} selected',
+    'list.expand': 'Expand',
+    'list.collapse': 'Collapse',
+    'list.select': 'Select this file',
+
+    'file.waiting': 'Waiting',
+    'file.checking': 'Checking…',
+    'file.ok': 'Nothing to do',
+    'file.needs': 'Needs work',
+    'file.broken': 'Cannot process',
+    'file.queued': 'Queued',
+    'file.queued.pos': 'Queued (position {pos})',
+    'file.running': 'Fixing…',
+    'file.done': 'Done',
+    'file.failed': 'Failed',
+    'file.skipped': 'Nothing to do',
+
+    'settings.process': 'Processing',
+    'settings.remux': 'Remux (lossless, fast)',
+    'settings.reencode': 'Re-encode (changes codec/size, slow)',
     'label.format': 'Format',
     'opt.progressive': 'Progressive (plays anywhere)',
     'opt.fmp4': 'Fragmented (for streaming)',
     'hint.format': 'Progressive plays anywhere; Fragmented suits streaming',
     'info.format':
       'Progressive: plays anywhere, local or web. Fragmented: for streaming / live-style delivery.',
-    'label.output': 'Output',
+    'advanced.norm': 'Advanced (usually not needed)',
     'label.window': 'Interleave window (ms)',
     'hint.window': 'Audio/video interleave granularity; keep 1000 if unsure',
     'info.window':
@@ -242,14 +267,6 @@ const STRINGS = {
     'label.frag': 'Fragment length (ms)',
     'hint.frag': 'Length of each fragment; keep 2000 if unsure',
     'info.frag': 'Seconds per fragment; only used for Fragmented MP4. Keep 2000 if unsure.',
-    'advanced.norm': 'Advanced (usually not needed)',
-    'out.norm.placeholder': 'output (default: <input>.norm.mp4)',
-    'btn.saveas': 'Save as…',
-    'btn.normalize': 'Normalize',
-
-    // Re-encode card
-    'card.reencode': 'Re-encode (optional · advanced)',
-    'card.reencode.sub': 'Re-encodes (lossy)',
     'label.codec': 'Codec',
     'opt.codec.copy': 'copy',
     'hint.codec': 'H.264 plays everywhere; copy only remuxes',
@@ -271,70 +288,48 @@ const STRINGS = {
     'hint.gop': 'Keyframe interval; 2s is fine',
     'info.gop':
       'How often a seekable keyframe is inserted. Smaller → more precise scrubbing, slightly larger. 2s is fine.',
-    'out.reenc.placeholder': 'output (default: <input>.reenc.mp4)',
-    'btn.reencode': 'Re-encode',
-    'card.log': 'Log',
 
-    // Dynamic log
-    'log.ready': 'ready',
-    'log.selected': 'selected {path}',
-    'log.noFile': 'no file selected',
-    'log.inspected': 'inspected',
-    'log.inspectFailed': 'inspect failed: {err}',
-    'log.normalizing': 'normalizing…',
-    'log.normalizeFailed': 'normalize failed: {err}',
-    'log.reencoding': 're-encoding…',
-    'log.reencodeFailed': 're-encode failed: {err}',
-    'log.done': 'done -> {path}',
+    'output.label': 'Output',
+    'output.inplace': 'Replace originals (auto backup)',
+    'output.new': 'Write to a folder',
+    'output.inplace.hint': 'Originals are backed up before they are replaced.',
+    'output.inplace.warning':
+      '⚠️ Original files will be replaced. Each source is backed up first to “{dir}”; restore it from “Backup management” below.',
+    'output.inplace.defaultDir': '.mp4norm-backup beside each file',
+    'output.backupdir': 'Backup folder',
+    'output.backupdir.placeholder': 'Leave empty to store backups in .mp4norm-backup beside each file',
+    'output.outdir': 'Output folder',
+    'output.outdir.placeholder': 'Leave empty to write beside each source file',
+    'output.namerule': 'File naming',
+    'output.namerule.suffix': 'Keep name + suffix',
+    'output.namerule.keep': 'Keep name',
 
-    // Batch list (the default entry point)
-    'batch.card': 'Check & fix',
-    'btn.chooseFiles': 'Choose files…',
-    'btn.chooseFolder': 'Choose folder…',
-    'btn.clear': 'Clear list',
-    'btn.scan': 'Re-scan',
-    'btn.batchNormalize': 'Normalize all',
-    'btn.batchNormalize.count': 'Fix {n} file(s)',
+    'btn.fix': 'Fix {n} file(s)',
     'btn.cancel': 'Stop',
     'btn.retry': 'Retry',
-    'btn.chooseOutdir': 'Choose…',
-    'batch.drop': 'Drop files or folders here, or use the buttons above',
-    'batch.filter': 'Filter',
-    'batch.filter.all': 'All',
-    'batch.filter.needs': 'Needs work',
-    'batch.filter.broken': 'Broken',
-    'batch.sortSize': 'Sort by size',
-    'batch.count': '{total} file(s) · {needs} need fixing',
-    'batch.col.file': 'File',
-    'batch.col.size': 'Size',
-    'batch.col.verdict': 'Verdict',
-    'batch.col.reason': 'Reason',
-    'batch.col.status': 'Status',
-    'batch.details': 'Details',
-    'batch.outdir': 'Output folder',
-    'batch.outdir.placeholder': 'Default: same folder as the source file',
-    'batch.detail.path': 'Full path',
-    'batch.detail.rawError': 'Raw error',
-    // Plain-language batch failure reasons. The raw error is kept in the
-    // detail block (batch.detail.rawError) for troubleshooting.
-    'batch.fail.reason.structure':
-      'Failed: the file’s data-block structure is unusual and cannot be normalized safely (try re-encoding)',
-    'batch.fail.reason.unreadable': 'Failed: the file could not be read (it may have been moved or deleted)',
-    'batch.fail.reason.moov-missing': 'Failed: the file has no index (moov) and cannot be processed',
-    'batch.fail.reason.unknown': 'Failed: {err}',
-    'batch.progress': '{done}/{total} done',
-    'batch.progress.current': 'Fixing {index}/{total}: {name}',
-    'batch.summary': '{ok} succeeded / {skip} skipped / {fail} failed',
-    'batch.summary.cancelled': 'Stopped: {ok} succeeded / {skip} skipped / {fail} failed',
-    'batch.nothing': 'Nothing needs work',
-    'batch.status.queued': 'queued',
-    'batch.status.running': 'fixing',
-    'batch.status.done': 'done',
-    'batch.status.failed': 'failed',
-    'batch.status.skipped': 'skipped',
-    'status.ok': '✅ OK',
-    'status.needs_work': '⚠️ Needs work',
-    'status.broken': '❌ Cannot process',
+    'btn.retryFailed': 'Retry the {n} failed',
+    'btn.undo': 'Undo this run',
+
+    'scan.finding': 'Looking for videos… {n} found',
+    'scan.checking': 'Checking… {n} found',
+    'progress.current': 'Fixing {index}/{total} · {name}',
+    'progress.done': '{done}/{total} done',
+    'summary.done': 'Done · {ok} succeeded · {need} nothing to do · {fail} failed · {saved}',
+    'summary.cancelled': 'Stopped · {ok} succeeded · {need} nothing to do · {fail} failed · {saved}',
+    'summary.saved': 'saved {size}',
+    'summary.grew': 'grew {size}',
+    'summary.nothing': 'Nothing needs work',
+
+    'detail.path': 'Full path',
+    'detail.reasons': 'Diagnosis',
+    'detail.probe': 'Container',
+    'detail.rawError': 'Raw error',
+    'fail.reason.structure':
+      'the data-block structure is unusual and cannot be remuxed safely (try “Re-encode”)',
+    'fail.reason.unreadable': 'the file could not be read (it may have been moved or deleted)',
+    'fail.reason.moov-missing': 'the file has no index (moov) and cannot be processed',
+    'fail.reason.unknown': '{err}',
+
     'reason.moov-at-end': 'Index at the end: the first frame needs the whole file (~{size})',
     'reason.mdat-fragmented': 'Fragmented into {n} data blocks: seeking jumps back and forth',
     'reason.not-interleaved': 'Audio and video are not interleaved',
@@ -345,31 +340,26 @@ const STRINGS = {
     'reason.no-ftyp': 'No ftyp box found; the file type is undeclared',
     'reason.fragmented': 'Fragmented MP4 (moof boxes present)',
     'reason.ok': 'Already normalized',
-    'log.scanning': 'scanning {n} file(s)…',
-    'log.scanned': 'scan done: {ok} OK / {needs} need work / {broken} broken',
-    'log.scanFailed': 'scan failed: {err}',
+
+    'log.ready': 'ready',
+    'log.noFile': 'no file selected',
     'log.cleared': 'list cleared',
-    'log.batchStart': 'normalizing {n} file(s)…',
-    'log.batchDone': 'batch done: {ok} succeeded / {fail} failed',
-    'log.batchRefreshed': 're-checked the results and refreshed the verdicts and button count',
-    'log.batchCancelled': 'batch stopped',
-    'log.batchFailed': 'batch failed: {err}',
+    'log.scanning': 'looking for videos in {n} location(s)…',
+    'log.scanned': 'scan done: {ok} nothing to do / {needs} need work / {broken} cannot process',
+    'log.scanFailed': 'scan failed: {err}',
+    'log.fixStart': 'fixing {n} file(s)…',
+    'log.fixDone': 'fix done: {ok} succeeded / {fail} failed',
+    'log.fixCancelled': 'fix stopped',
+    'log.fixFailed': 'fix failed: {err}',
     'log.retry': 'retrying {name}…',
     'log.retryDone': 'retry done -> {name}',
     'log.retryFailed': 'retry failed: {err}',
+    'log.undoDone': 'undone: {restored} restored / {deleted} deleted / {failed} failed',
+    'log.undoFailed': 'undo failed: {err}',
+    'log.backupListed': 'backup list refreshed: {n}',
 
-    // Output mode (new file vs replace-in-place) and the backup manager.
-    'batch.mode.label': 'Output mode',
-    'batch.mode.new': 'New file (recommended)',
-    'batch.mode.inplace': 'Replace originals (auto backup)',
-    'batch.mode.hint': 'Replace mode backs up originals first',
-    'batch.inplace.warning':
-      '⚠️ Original files will be replaced. Each source is backed up first to “{dir}”; restore it from “Backup management”.',
-    'batch.inplace.defaultDir': '.mp4norm-backup beside each file',
-    'batch.inplace.backupdir': 'Backup folder',
-    'batch.inplace.backupdir.placeholder': 'Leave empty to store backups in .mp4norm-backup beside each file',
     'backup.card': 'Backup management',
-    'backup.card.sub': 'Review, restore or delete the backups made by replace-in-place',
+    'backup.card.sub': 'Review, restore or delete the backups made by replace-originals',
     'backup.dir': 'Backup folder',
     'backup.dir.placeholder': 'media folder (or .mp4norm-backup)',
     'backup.dir.hint':
@@ -395,17 +385,13 @@ const STRINGS = {
     'backup.restored': 'Restored {path}',
     'backup.restoreNote': 'The replaced version was saved as backup {name}',
     'backup.failed': 'Backup operation failed: {err}',
-    'log.backupListed': 'backup list refreshed: {n}',
 
-    // Before/after benefit numbers.
-    'gain.title': '✅ Done (lossless, no quality change)',
+    'gain.title': 'Done (lossless, no quality change)',
     'gain.firstplay': 'Bytes before first frame: ~{before} → ~{after}',
     'gain.mdat': 'Data fragments: {before} → {after}',
     'gain.segments': 'Fragments: {after}',
     'gain.size': 'Size: {before} → {after}',
-    'gain.summary': '{n} file(s): bytes before first frame went from ~{before} down to ~{after}',
 
-    // Report
     'report.file': 'file',
     'report.size': 'size',
     'report.brand': 'brand',
@@ -421,8 +407,8 @@ const STRINGS = {
 };
 
 // Chinese explanations for every probe finding Code in internal/probe/probe.go.
-// English keeps the Message emitted by the probe; an unlisted Code also falls
-// back to the Message so we never render an empty string or a bare key.
+// An unlisted Code falls back to the probe's own Message so we never render an
+// empty string or a bare key.
 const FINDINGS_ZH = {
   'moov-missing': '未找到 moov 原子：文件元数据缺失，无法播放',
   'moov-at-end':
@@ -443,7 +429,7 @@ function readLang() {
 
 let current = readLang();
 
-/** getLang returns the active language code ("zh" or "en"). */
+/** getLang returns the active language code. */
 export function getLang() {
   return current;
 }
@@ -477,6 +463,6 @@ export function t(key, vars) {
 /** findingMessage localizes a probe finding by Code, falling back to Message. */
 export function findingMessage(finding) {
   if (!finding) return '';
-  if (current === 'en') return finding.Message;
-  return FINDINGS_ZH[finding.Code] || finding.Message;
+  if (current === 'zh') return FINDINGS_ZH[finding.Code] || finding.Message;
+  return finding.Message;
 }
