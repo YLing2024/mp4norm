@@ -19,6 +19,7 @@ const LANGS = LANGUAGES.map((l) => l.code);
 
 const STRINGS = {
   zh: {
+    'card.log': '日志',
     'app.name': 'mp4norm',
     'info.aria': '详细说明',
     'lang.aria': '语言',
@@ -219,6 +220,7 @@ const STRINGS = {
   },
 
   en: {
+    'card.log': 'Log',
     'app.name': 'mp4norm',
     'info.aria': 'Details',
     'lang.aria': 'Language',
@@ -406,6 +408,7 @@ const STRINGS = {
   },
 
   zh_Hant: {
+    'card.log': '日誌',
     'app.name': 'mp4norm',
     'info.aria': '詳細說明',
     'lang.aria': '語言',
@@ -572,6 +575,7 @@ const STRINGS = {
   },
 
   ja: {
+    'card.log': 'ログ',
     'app.name': 'mp4norm',
     'info.aria': '詳細',
     'lang.aria': '言語',
@@ -738,6 +742,7 @@ const STRINGS = {
   },
 
   ko: {
+    'card.log': '로그',
     'app.name': 'mp4norm',
     'info.aria': '자세히',
     'lang.aria': '언어',
