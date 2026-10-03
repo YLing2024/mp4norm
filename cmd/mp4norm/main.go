@@ -219,6 +219,7 @@ func runScan(args []string) error {
 
 	ok, nw, broken := scanSummary(verdicts)
 	target := scanTarget(inputs)
+	nextStep := scanNextStep(inputs)
 
 	if *asJSON {
 		shown := verdicts
@@ -235,7 +236,7 @@ func runScan(args []string) error {
 			return err
 		}
 	} else {
-		printScanReport(os.Stdout, target, verdicts, *needsWorkOnly, *verbose)
+		printScanReport(os.Stdout, target, verdicts, *needsWorkOnly, *verbose, nextStep)
 	}
 
 	if code := scanExitCode(ok, nw, broken); code != 0 {
@@ -286,6 +287,18 @@ func scanTarget(inputs []string) string {
 	return fmt.Sprintf("%d 个位置", len(inputs))
 }
 
+// scanNextStep suggests the follow-up `fix` invocation in the shape that
+// matches the input: a single named file gets the plain single-file form, while
+// a directory (or several inputs) gets the -outdir form.
+func scanNextStep(inputs []string) string {
+	if len(inputs) == 1 {
+		if fi, err := os.Stat(inputs[0]); err == nil && !fi.IsDir() {
+			return "下一步：mp4norm fix <文件>"
+		}
+	}
+	return "下一步：mp4norm fix -outdir <输出目录> <目录>      规整这些文件"
+}
+
 type scanCountsJSON struct {
 	OK        int `json:"ok"`
 	NeedsWork int `json:"needsWork"`
@@ -301,7 +314,7 @@ type scanJSON struct {
 
 // printScanReport writes the human table grouped by verdict, most urgent
 // first. Raw fields only appear with verbose.
-func printScanReport(w io.Writer, target string, vs []classify.Verdict, needsWorkOnly, verbose bool) {
+func printScanReport(w io.Writer, target string, vs []classify.Verdict, needsWorkOnly, verbose bool, nextStep string) {
 	ok, needsWork, broken := scanSummary(vs)
 	fmt.Fprintf(w, "扫描 %s —— 发现 %d 个 MP4 文件\n\n", target, len(vs))
 
@@ -343,8 +356,8 @@ func printScanReport(w io.Writer, target string, vs []classify.Verdict, needsWor
 	}
 	fmt.Fprintf(w, "共 %d 个：%d 个建议规整 / %d 个无需处理 / %d 个无法处理\n",
 		len(vs), needsWork, ok, broken)
-	if needsWork > 0 {
-		fmt.Fprintln(w, "下一步：mp4norm fix -outdir <输出目录> <目录>      规整这些文件")
+	if needsWork > 0 && nextStep != "" {
+		fmt.Fprintln(w, nextStep)
 	}
 }
 
