@@ -372,3 +372,124 @@ func TestInitialTargetsExposed(t *testing.T) {
 		t.Fatalf("InitialTargets() = %v, want %v", got, want)
 	}
 }
+
+func TestScanStreamMatchesScanPaths(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "ok.mp4"), ftypBox(), mkBox("moov", []byte("meta")), mkBox("mdat", []byte("data")))
+	writeFile(t, filepath.Join(dir, "work.mp4"), ftypBox(), mkBox("mdat", []byte("data")), mkBox("moov", []byte("meta")))
+	if err := os.WriteFile(filepath.Join(dir, "bad.mp4"), []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A nil context just means the events are dropped; the return value must
+	// still be the full, authoritative verdict list.
+	app := NewApp()
+	streamed, err := app.ScanStream([]string{dir})
+	if err != nil {
+		t.Fatalf("ScanStream: %v", err)
+	}
+	plain, err := app.ScanPaths([]string{dir})
+	if err != nil {
+		t.Fatalf("ScanPaths: %v", err)
+	}
+	if len(streamed) != len(plain) {
+		t.Fatalf("ScanStream returned %d verdicts, ScanPaths %d", len(streamed), len(plain))
+	}
+	for i := range plain {
+		if streamed[i].Path != plain[i].Path || streamed[i].Status != plain[i].Status {
+			t.Fatalf("verdict[%d] = %+v, want %+v", i, streamed[i], plain[i])
+		}
+	}
+}
+
+func TestDefaultBatchOutNameRule(t *testing.T) {
+	in := filepath.Join("media", "clip.mp4")
+	if got := defaultBatchOut(in, "", ".norm.mp4", ""); got != filepath.Join("media", "clip.norm.mp4") {
+		t.Fatalf("suffix output = %q", got)
+	}
+	if got := defaultBatchOut(in, "out", ".reenc.mp4", "suffix"); got != filepath.Join("out", "clip.reenc.mp4") {
+		t.Fatalf("suffix+outdir output = %q", got)
+	}
+	if got := defaultBatchOut(in, "out", ".norm.mp4", "keep"); got != filepath.Join("out", "clip.mp4") {
+		t.Fatalf("keep output = %q", got)
+	}
+}
+
+func TestBatchNormalizeRefusesOutputOverInput(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+
+	// "keep" with the default output dir would write clip.mp4 over itself; the
+	// run must report a failure instead of clobbering the input.
+	app := NewApp()
+	res, err := app.BatchNormalize(BatchRequest{
+		Inputs: []string{in}, Format: "progressive", WindowMs: 1000, NameRule: "keep",
+	})
+	if err != nil {
+		t.Fatalf("BatchNormalize: %v", err)
+	}
+	if res.Failed != 1 || res.Done != 0 {
+		t.Fatalf("result = %+v, want one failure", res)
+	}
+}
+
+func TestUndoBatchRemovesNewFileOutput(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+	original := sha256Of(t, in)
+
+	app := NewApp()
+	res, err := app.BatchNormalize(BatchRequest{Inputs: []string{in}, Format: "progressive", WindowMs: 1000})
+	if err != nil {
+		t.Fatalf("BatchNormalize: %v", err)
+	}
+	out := res.Results[0].Output
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("output missing before undo: %v", err)
+	}
+
+	undo, err := app.UndoBatch(res.Results)
+	if err != nil {
+		t.Fatalf("UndoBatch: %v", err)
+	}
+	if undo.Deleted != 1 || undo.Failed != 0 {
+		t.Fatalf("undo = %+v, want 1 deleted / 0 failed", undo)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("output survived undo: %v", err)
+	}
+	if got := sha256Of(t, in); got != original {
+		t.Fatal("undo changed the untouched input")
+	}
+}
+
+func TestUndoBatchRestoresInPlaceOriginal(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "clip.mp4")
+	writeFile(t, in, buildProgressive(t, true))
+	original := sha256Of(t, in)
+
+	app := NewApp()
+	res, err := app.BatchNormalize(BatchRequest{
+		Inputs: []string{in}, Format: "progressive", WindowMs: 1000, InPlace: true,
+	})
+	if err != nil {
+		t.Fatalf("BatchNormalize in-place: %v", err)
+	}
+	if res.Results[0].BackupPath == "" {
+		t.Fatalf("outcome = %+v, want a backup path", res.Results[0])
+	}
+
+	undo, err := app.UndoBatch(res.Results)
+	if err != nil {
+		t.Fatalf("UndoBatch: %v", err)
+	}
+	if undo.Restored != 1 || undo.Failed != 0 {
+		t.Fatalf("undo = %+v, want 1 restored / 0 failed", undo)
+	}
+	if got := sha256Of(t, in); got != original {
+		t.Fatal("undo did not restore the original bytes")
+	}
+}

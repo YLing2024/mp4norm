@@ -217,13 +217,67 @@ func (a *App) ScanPaths(paths []string) ([]classify.Verdict, error) {
 	for _, f := range bad {
 		verdicts = append(verdicts, classify.BrokenFromError(f.Path, f.Err))
 	}
+	sortVerdicts(verdicts)
+	return verdicts, nil
+}
+
+// scanPayload is the JSON shape of every "scan:*" event. Fields are omitted
+// when unused so each event stays small for very large folders.
+type scanPayload struct {
+	Path    string            `json:"path,omitempty"`
+	Name    string            `json:"name,omitempty"`
+	Phase   string            `json:"phase,omitempty"`
+	Index   int               `json:"index,omitempty"`
+	Total   int               `json:"total,omitempty"`
+	Found   int               `json:"found,omitempty"`
+	Verdict *classify.Verdict `json:"verdict,omitempty"`
+}
+
+// ScanStream is ScanPaths with live feedback. It emits "scan:found" as each
+// video file is discovered (before classification) and "scan:checked" after
+// each one is classified, so the frontend can render rows while a large folder
+// is still being walked instead of blocking on the whole scan. The returned
+// slice is the final, authoritative list.
+func (a *App) ScanStream(paths []string) ([]classify.Verdict, error) {
+	found := 0
+	files, bad := classify.CollectStream(paths, func(p string) {
+		found++
+		a.emitScan("scan:found", scanPayload{Path: p, Name: filepath.Base(p), Found: found})
+	})
+	total := len(files) + len(bad)
+	a.emitScan("scan:phase", scanPayload{Phase: "check", Total: total})
+
+	verdicts := make([]classify.Verdict, 0, total)
+	for i, p := range files {
+		a.emitScan("scan:checking", scanPayload{Index: i + 1, Total: total, Path: p})
+		v := classify.ClassifyFile(p)
+		verdicts = append(verdicts, v)
+		a.emitScan("scan:checked", scanPayload{Index: i + 1, Total: total, Verdict: &v})
+	}
+	for _, f := range bad {
+		v := classify.BrokenFromError(f.Path, f.Err)
+		verdicts = append(verdicts, v)
+		a.emitScan("scan:checked", scanPayload{Index: len(verdicts), Total: total, Verdict: &v})
+	}
+	sortVerdicts(verdicts)
+	return verdicts, nil
+}
+
+// sortVerdicts orders a verdict list by file name, then full path, so the same
+// folder always lists in the same order.
+func sortVerdicts(verdicts []classify.Verdict) {
 	sort.SliceStable(verdicts, func(i, j int) bool {
 		if verdicts[i].Name != verdicts[j].Name {
 			return verdicts[i].Name < verdicts[j].Name
 		}
 		return verdicts[i].Path < verdicts[j].Path
 	})
-	return verdicts, nil
+}
+
+func (a *App) emitScan(event string, p scanPayload) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, event, p)
+	}
 }
 
 // NormalizeRequest describes a lossless normalization request.
@@ -321,6 +375,26 @@ type BatchRequest struct {
 	InPlace bool `json:"inPlace"`
 	// BackupDir customizes the in-place backup directory (empty = default).
 	BackupDir string `json:"backupDir"`
+	// NameRule controls the output file name when writing a new file:
+	// "" or "suffix" appends the mode suffix, "keep" keeps the original name.
+	NameRule string `json:"nameRule"`
+}
+
+// BatchReencodeRequest describes a re-encode run over a list of files. It
+// mirrors BatchRequest but carries the ffmpeg options instead of the lossless
+// container format, so one processing flow can drive either path.
+type BatchReencodeRequest struct {
+	Inputs       []string `json:"inputs"`
+	Outdir       string   `json:"outdir"`
+	VideoCodec   string   `json:"videoCodec"`
+	Hardware     string   `json:"hardware"`
+	CRF          int      `json:"crf"`
+	Preset       string   `json:"preset"`
+	AudioBitrate string   `json:"audioBitrate"`
+	GOPSeconds   float64  `json:"gopSeconds"`
+	InPlace      bool     `json:"inPlace"`
+	BackupDir    string   `json:"backupDir"`
+	NameRule     string   `json:"nameRule"`
 }
 
 // BatchProgress is emitted on "batch:progress" as each file moves through the
@@ -409,7 +483,14 @@ func (a *App) BatchNormalize(req BatchRequest) (*BatchResult, error) {
 		}
 		out := in
 		if !req.InPlace {
-			out = defaultBatchOut(in, req.Outdir)
+			out = defaultBatchOut(in, req.Outdir, ".norm.mp4", req.NameRule)
+			if samePath(out, in) {
+				res.Failed++
+				msg := "output would overwrite the input; add a suffix or choose another folder"
+				res.Results = append(res.Results, BatchOutcome{Path: in, Output: out, Status: "failed", Error: msg})
+				a.emitBatch(BatchProgress{Index: i + 1, Total: res.Total, Path: in, Status: "failed", Error: msg})
+				continue
+			}
 		}
 		a.emitBatch(BatchProgress{Index: i + 1, Total: res.Total, Path: in, Status: "running"})
 
@@ -476,13 +557,218 @@ func normalizeFunc(format string, windowMs, fragMs int) (func(normalize.ReadSeek
 }
 
 // defaultBatchOut returns the output path for one batch input: alongside it by
-// default, or inside outdir when set.
-func defaultBatchOut(in, outdir string) string {
-	base := strings.TrimSuffix(filepath.Base(in), filepath.Ext(in)) + ".norm.mp4"
+// default, or inside outdir when set. nameRule "keep" preserves the original
+// file name; anything else appends suffix (e.g. ".norm.mp4").
+func defaultBatchOut(in, outdir, suffix, nameRule string) string {
+	base := filepath.Base(in)
+	if nameRule != "keep" {
+		base = strings.TrimSuffix(base, filepath.Ext(in)) + suffix
+	}
 	if outdir == "" {
 		return filepath.Join(filepath.Dir(in), base)
 	}
 	return filepath.Join(outdir, base)
+}
+
+// samePath reports whether two paths point at the same file. Windows compares
+// case-insensitively so a case-only difference is not mistaken for a new path.
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, e1 := filepath.Abs(a)
+	bb, e2 := filepath.Abs(b)
+	if e1 != nil || e2 != nil {
+		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+	}
+	return strings.EqualFold(filepath.Clean(aa), filepath.Clean(bb))
+}
+
+// BatchReencode re-encodes a list of files, one at a time, emitting the same
+// "batch:progress" events as BatchNormalize so the frontend has one flow. When
+// InPlace is set the fresh encode is written to a temp file beside the input
+// and swapped in after the original is backed up, matching the lossless path.
+func (a *App) BatchReencode(req BatchReencodeRequest) (*BatchResult, error) {
+	if len(req.Inputs) == 0 {
+		return nil, fmt.Errorf("batch: no input files")
+	}
+	a.batchMu.Lock()
+	if a.batchCancel != nil {
+		a.batchMu.Unlock()
+		return nil, fmt.Errorf("batch: a run is already in progress")
+	}
+	base := context.Background()
+	if a.ctx != nil {
+		base = a.ctx
+	}
+	ctx, cancel := context.WithCancel(base)
+	a.batchCancel = cancel
+	a.batchMu.Unlock()
+	defer func() {
+		a.batchMu.Lock()
+		a.batchCancel = nil
+		a.batchMu.Unlock()
+		cancel()
+	}()
+
+	if req.InPlace && req.Outdir != "" {
+		return nil, fmt.Errorf("batch: in-place mode and an output directory are mutually exclusive")
+	}
+	if !req.InPlace && req.BackupDir != "" {
+		return nil, fmt.Errorf("batch: a backup directory requires in-place mode")
+	}
+	if !req.InPlace && req.Outdir != "" {
+		if err := os.MkdirAll(req.Outdir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+
+	opts := ffmpeg.Options{
+		Video:        ffmpeg.VideoCodec(strings.ToLower(req.VideoCodec)),
+		Hardware:     ffmpeg.HardwareMode(strings.ToLower(req.Hardware)),
+		CRF:          req.CRF,
+		Preset:       req.Preset,
+		AudioBitrate: req.AudioBitrate,
+		GOPSeconds:   req.GOPSeconds,
+	}
+
+	res := &BatchResult{Total: len(req.Inputs)}
+	for i, in := range req.Inputs {
+		if ctx.Err() != nil {
+			res.Cancelled = true
+			res.Skipped = res.Total - i
+			break
+		}
+		out := in
+		if !req.InPlace {
+			out = defaultBatchOut(in, req.Outdir, ".reenc.mp4", req.NameRule)
+			if samePath(out, in) {
+				res.Failed++
+				msg := "output would overwrite the input; add a suffix or choose another folder"
+				res.Results = append(res.Results, BatchOutcome{Path: in, Output: out, Status: "failed", Error: msg})
+				a.emitBatch(BatchProgress{Index: i + 1, Total: res.Total, Path: in, Status: "failed", Error: msg})
+				continue
+			}
+		}
+		a.emitBatch(BatchProgress{Index: i + 1, Total: res.Total, Path: in, Status: "running"})
+
+		gain, backupPath, inSize, outSize, err := a.reencodeOne(ctx, in, out, opts, req.InPlace, req.BackupDir)
+		if err != nil {
+			res.Failed++
+			res.Results = append(res.Results, BatchOutcome{Path: in, Output: out, Status: "failed", Error: err.Error()})
+			a.emitBatch(BatchProgress{Index: i + 1, Total: res.Total, Path: in, Status: "failed", Error: err.Error()})
+			continue
+		}
+		res.Done++
+		res.Results = append(res.Results, BatchOutcome{
+			Path: in, Output: out, Status: "done",
+			InputSize: inSize, OutputSize: outSize, Gain: gain, BackupPath: backupPath,
+		})
+		if gain != nil {
+			res.BeforeFirstPlay += gain.BeforeFirstPlay
+			res.AfterFirstPlay += gain.AfterFirstPlay
+		}
+		a.emitBatch(BatchProgress{Index: i + 1, Total: res.Total, Path: in, Status: "done"})
+	}
+	return res, nil
+}
+
+// reencodeOne runs one ffmpeg encode and, in in-place mode, publishes it with
+// the same backup-then-swap discipline as the lossless path.
+func (a *App) reencodeOne(ctx context.Context, in, out string, opts ffmpeg.Options, inPlace bool, backupDir string) (*Gain, string, int64, int64, error) {
+	before, _ := probe.Analyze(in)
+	var inSize0 int64
+	if fi, err := os.Stat(in); err == nil {
+		inSize0 = fi.Size()
+	}
+	cfg := ffmpeg.Config{}
+	if !inPlace {
+		if err := cfg.Run(ctx, in, out, opts, nil); err != nil {
+			return nil, "", 0, 0, err
+		}
+		after, _ := probe.Analyze(out)
+		inSize, outSize := fileSizes(in, out)
+		return gainOf(before, after, false), "", inSize, outSize, nil
+	}
+
+	dir := filepath.Dir(in)
+	tmp, err := os.CreateTemp(dir, safefile.TempPrefix+"*"+".mp4")
+	if err != nil {
+		return nil, "", 0, 0, err
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+	a.trackTemp(tmpName)
+	defer func() {
+		os.Remove(tmpName)
+		a.trackTemp("")
+	}()
+	if err := cfg.Run(ctx, in, tmpName, opts, nil); err != nil {
+		return nil, "", 0, 0, err
+	}
+
+	bdir := backupDir
+	if bdir == "" {
+		bdir = backup.DefaultDir(in)
+	}
+	entry, err := backup.Move(in, bdir)
+	if err != nil {
+		return nil, "", 0, 0, fmt.Errorf("back up original: %w", err)
+	}
+	if err := os.Rename(tmpName, in); err != nil {
+		stored := filepath.Join(bdir, entry.Backup)
+		if rbErr := os.Rename(stored, in); rbErr != nil {
+			return nil, "", 0, 0, fmt.Errorf(
+				"replace failed: %v; rollback also failed (%v), the untouched original is preserved at %s",
+				err, rbErr, stored)
+		}
+		return nil, "", 0, 0, fmt.Errorf("replace failed, original restored: %w", err)
+	}
+	after, _ := probe.Analyze(in)
+	var outSize int64
+	if fi, err := os.Stat(in); err == nil {
+		outSize = fi.Size()
+	}
+	return gainOf(before, after, false), filepath.Join(bdir, entry.Backup), inSize0, outSize, nil
+}
+
+// UndoResult reports how many files an undo restored or removed.
+type UndoResult struct {
+	Restored int      `json:"restored"`
+	Deleted  int      `json:"deleted"`
+	Failed   int      `json:"failed"`
+	Errors   []string `json:"errors,omitempty"`
+}
+
+// UndoBatch reverses a completed run. In-place outcomes are restored from
+// their backup; new-file outcomes are deleted. Only successful outcomes are
+// touched, so a partial undo never removes an untouched original.
+func (a *App) UndoBatch(outcomes []BatchOutcome) (*UndoResult, error) {
+	res := &UndoResult{}
+	for _, o := range outcomes {
+		if o.Status != "done" {
+			continue
+		}
+		if o.BackupPath != "" {
+			dir := filepath.Dir(o.BackupPath)
+			if _, err := backup.Restore(dir, o.Path); err != nil {
+				res.Failed++
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", o.Path, err))
+				continue
+			}
+			res.Restored++
+			continue
+		}
+		if o.Output != "" && !samePath(o.Output, o.Path) {
+			if err := os.Remove(o.Output); err != nil && !os.IsNotExist(err) {
+				res.Failed++
+				res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", o.Output, err))
+				continue
+			}
+			res.Deleted++
+		}
+	}
+	return res, nil
 }
 
 // Reencode runs the optional ffmpeg re-encode path, emitting progress events.

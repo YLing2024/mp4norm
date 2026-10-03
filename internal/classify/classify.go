@@ -71,10 +71,13 @@ type Unreadable struct {
 	Err  error
 }
 
-// Collect expands directory arguments into their video files (.mp4/.m4v/.mov)
-// and keeps explicit file arguments as-is. Walks are recursive and results are
-// de-duplicated case insensitively so overlapping inputs are only counted once.
-func Collect(paths []string) (files []string, bad []Unreadable) {
+// CollectStream expands directory arguments into their video files
+// (.mp4/.m4v/.mov) and keeps explicit file arguments as-is, invoking onFound
+// for every file the moment it is discovered — before any classification runs.
+// It lets a GUI show rows while a large folder is still being walked. onFound
+// may be nil. Walks are recursive and results are de-duplicated case
+// insensitively so overlapping inputs are only counted once.
+func CollectStream(paths []string, onFound func(path string)) (files []string, bad []Unreadable) {
 	seen := make(map[string]bool)
 	add := func(p string) {
 		key := strings.ToLower(filepath.Clean(p))
@@ -83,6 +86,9 @@ func Collect(paths []string) (files []string, bad []Unreadable) {
 		}
 		seen[key] = true
 		files = append(files, p)
+		if onFound != nil {
+			onFound(p)
+		}
 	}
 	for _, a := range paths {
 		fi, err := os.Stat(a)
@@ -112,6 +118,12 @@ func Collect(paths []string) (files []string, bad []Unreadable) {
 		}
 	}
 	return files, bad
+}
+
+// Collect expands directory arguments into their video files and keeps explicit
+// file arguments as-is. It is CollectStream without discovery notifications.
+func Collect(paths []string) ([]string, []Unreadable) {
+	return CollectStream(paths, nil)
 }
 
 // BrokenFromError builds the verdict for a path that could not be collected.
