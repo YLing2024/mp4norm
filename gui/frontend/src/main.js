@@ -1117,7 +1117,7 @@ EventsOn('batch:progress', (p) => {
 // ---- Bootstrap ------------------------------------------------------------
 
 const log = (msg) => {
-  const locale = getLang() === 'zh' || getLang() === 'zh_Hant' ? 'zh-CN' : getLang() === 'ja' ? 'ja-JP' : getLang() === 'ko' ? 'ko-KR' : 'en-US';
+  const locale = { zh: 'zh-CN', zh_Hant: 'zh-TW', ja: 'ja-JP', ko: 'ko-KR', en: 'en-US' }[getLang()] || 'en-US';
   const line = `${new Date().toLocaleTimeString(locale)}  ${msg}`;
   state.logs.push(line);
   const el = $('log');
