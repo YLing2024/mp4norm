@@ -418,6 +418,9 @@ type transformSpec struct {
 	output    string
 }
 
+// transformFunc is a lossless container rewrite: read from src, write to dst.
+type transformFunc func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error)
+
 // buildSpec validates the output-mode flags and resolves the new-file path.
 func buildSpec(cmd, in, out, suffix string, inPlace bool, backupDir string) (transformSpec, error) {
 	if inPlace && out != "" {
@@ -435,7 +438,7 @@ func buildSpec(cmd, in, out, suffix string, inPlace bool, backupDir string) (tra
 
 // runTransform performs one lossless rewrite through the shared safe write path
 // and prints the before/after benefit summary.
-func runTransform(in string, spec transformSpec, fn func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error), fragmented bool) error {
+func runTransform(in string, spec transformSpec, fn transformFunc, fragmented bool) error {
 	oc, err := safefile.Transform(safefile.Request{
 		Input:      in,
 		Output:     spec.output,
@@ -511,7 +514,7 @@ func printBenefit(w io.Writer, before, after *probe.Report, fragmented bool) {
 
 // normalizeFunc builds the lossless transform for the requested output format
 // and reports whether it produces a fragmented MP4.
-func normalizeFunc(format string, windowMs, fragMs int) (func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, error), bool, error) {
+func normalizeFunc(format string, windowMs, fragMs int) (transformFunc, bool, error) {
 	switch strings.ToLower(format) {
 	case "progressive", "mp4", "prog":
 		return func(src normalize.ReadSeekerAt, dst io.Writer) (*normalize.Result, error) {
@@ -607,25 +610,49 @@ func runBatch(args []string) error {
 	if len(inputs) == 0 {
 		return fmt.Errorf("batch: no input files")
 	}
-	if *inPlace && *outdir != "" {
-		return fmt.Errorf("batch: -in-place and -outdir are mutually exclusive")
-	}
-	if !*inPlace && *backupDir != "" {
-		return fmt.Errorf("batch: -backup-dir requires -in-place")
-	}
 	fn, fragmented, err := normalizeFunc(*format, *window, *fragMs)
 	if err != nil {
 		return err
 	}
-	if *outdir != "" {
-		if err := os.MkdirAll(*outdir, 0o755); err != nil {
+	return runConcurrent(inputs, batchSettings{
+		cmd:       "batch",
+		jobs:      *jobs,
+		outdir:    *outdir,
+		suffix:    *suffix,
+		inPlace:   *inPlace,
+		backupDir: *backupDir,
+	}, fn, fragmented)
+}
+
+// batchSettings carries the resolved options for a multi-file lossless rewrite.
+type batchSettings struct {
+	cmd       string // command name used in error messages
+	jobs      int
+	outdir    string
+	suffix    string
+	inPlace   bool
+	backupDir string
+}
+
+// runConcurrent is the shared engine that rewrites many files in parallel. It
+// backs the legacy `batch` command and the directory/multi-input path of `fix`,
+// so both share one implementation of the concurrent safe-write loop.
+func runConcurrent(inputs []string, s batchSettings, fn transformFunc, fragmented bool) error {
+	if s.inPlace && s.outdir != "" {
+		return fmt.Errorf("%s: -in-place and -outdir are mutually exclusive", s.cmd)
+	}
+	if !s.inPlace && s.backupDir != "" {
+		return fmt.Errorf("%s: -backup-dir requires -in-place", s.cmd)
+	}
+	if s.outdir != "" {
+		if err := os.MkdirAll(s.outdir, 0o755); err != nil {
 			return err
 		}
 	}
-
-	if *jobs < 1 {
-		*jobs = 1
+	if s.jobs < 1 {
+		s.jobs = 1
 	}
+
 	type item struct {
 		in  string
 		out string
@@ -633,14 +660,14 @@ func runBatch(args []string) error {
 		err error
 	}
 	results := make([]item, len(inputs))
-	sem := make(chan struct{}, *jobs)
+	sem := make(chan struct{}, s.jobs)
 	var wg sync.WaitGroup
 	start := time.Now()
 
 	for i, in := range inputs {
 		i, in := i, in
-		out := batchOutput(in, *outdir, *suffix)
-		if *inPlace {
+		out := batchOutput(in, s.outdir, s.suffix)
+		if s.inPlace {
 			out = in
 		}
 		wg.Add(1)
@@ -651,8 +678,8 @@ func runBatch(args []string) error {
 			oc, err := safefile.Transform(safefile.Request{
 				Input:      in,
 				Output:     out,
-				InPlace:    *inPlace,
-				BackupDir:  *backupDir,
+				InPlace:    s.inPlace,
+				BackupDir:  s.backupDir,
 				Fragmented: fragmented,
 				Transform:  fn,
 				Logf:       cleanupLog,
@@ -685,7 +712,7 @@ func runBatch(args []string) error {
 			okCount, probe.HumanBytes(beforeFP), probe.HumanBytes(afterFP))
 	}
 	if failCount > 0 {
-		return fmt.Errorf("batch: %d file(s) failed", failCount)
+		return fmt.Errorf("%s: %d file(s) failed", s.cmd, failCount)
 	}
 	return nil
 }
