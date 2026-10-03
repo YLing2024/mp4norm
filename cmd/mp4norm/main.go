@@ -64,7 +64,8 @@ func run(args []string) error {
 		return nil
 	case "probe":
 		return runProbe(args[1:])
-	case "scan":
+	case "check", "scan":
+		// `scan` is a hidden alias of `check`, kept for old docs and scripts.
 		return runScan(args[1:])
 	case "faststart":
 		return runFaststart(args[1:])
@@ -111,11 +112,12 @@ func runProbe(args []string) error {
 	return nil
 }
 
-// runScan classifies every file under the given directories (or the files
-// themselves) and prints a plain-language table. Exit code 0 = all clean,
-// 1 = something needs work, 2 = something is broken or could not be read.
+// runScan is the engine behind `check` (and its hidden `scan` alias). It
+// classifies every file under the given directories, or the files themselves,
+// and prints a plain-language table. Exit code 0 = all clean, 1 = something
+// needs work, 2 = something is broken or could not be read.
 func runScan(args []string) error {
-	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	verbose := fs.Bool("v", false, "show the raw probe fields under each file")
 	needsWorkOnly := fs.Bool("needs-work", false, "only list files that need work")
 	asJSON := fs.Bool("json", false, "machine-readable JSON output")
@@ -124,7 +126,7 @@ func runScan(args []string) error {
 	}
 	inputs := fs.Args()
 	if len(inputs) == 0 {
-		return fmt.Errorf("scan: missing <directory|file...>")
+		return fmt.Errorf("check: missing <directory|file...>")
 	}
 
 	files, bad := classify.Collect(inputs)
