@@ -43,16 +43,16 @@ func runWatch(args []string) error {
 	}
 	roots := fs.Args()
 	if len(roots) == 0 {
-		return fmt.Errorf("watch: missing <directory...>")
+		return fmt.Errorf("watch: 请给出要监视的目录")
 	}
 	if *inPlace && *outdir != "" {
-		return fmt.Errorf("watch: -in-place and -outdir are mutually exclusive")
+		return fmt.Errorf("watch: -in-place 与 -outdir 不能同时使用")
 	}
 	if !*inPlace && *backupDir != "" {
-		return fmt.Errorf("watch: -backup-dir requires -in-place")
+		return fmt.Errorf("watch: -backup-dir 需要配合 -in-place 使用")
 	}
 	if !*once && *interval < minWatchInterval {
-		return fmt.Errorf("watch: -interval must be at least %s", minWatchInterval)
+		return fmt.Errorf("watch: -interval 不能小于 %s", minWatchInterval)
 	}
 	for _, root := range roots {
 		fi, err := os.Stat(root)
@@ -60,7 +60,7 @@ func runWatch(args []string) error {
 			return err
 		}
 		if !fi.IsDir() {
-			return fmt.Errorf("watch: %s is not a directory", root)
+			return fmt.Errorf("watch: %s 不是目录", root)
 		}
 	}
 	if *outdir != "" {

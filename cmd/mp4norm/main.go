@@ -58,7 +58,7 @@ func run(args []string) error {
 	switch args[0] {
 	case "version", "--version", "-v":
 		if len(args) > 1 {
-			return fmt.Errorf("version: unexpected extra argument(s): %s", strings.Join(args[1:], " "))
+			return fmt.Errorf("version: 多了不需要的参数：%s", strings.Join(args[1:], " "))
 		}
 		fmt.Println("mp4norm", version)
 		return nil
@@ -87,22 +87,22 @@ func run(args []string) error {
 		return runWatch(args[1:])
 	case "help", "-h", "--help":
 		if len(args) > 1 {
-			return fmt.Errorf("help: unexpected extra argument(s): %s", strings.Join(args[1:], " "))
+			return fmt.Errorf("help: 多了不需要的参数：%s", strings.Join(args[1:], " "))
 		}
 		usage(os.Stdout)
 		return nil
 	default:
 		usage(os.Stderr)
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("未知命令 %q", args[0])
 	}
 }
 
 func runProbe(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("probe: missing <file>")
+		return fmt.Errorf("probe: 请给出要检查的文件")
 	}
 	if len(args) > 1 {
-		return fmt.Errorf("probe: unexpected extra argument(s): %s", strings.Join(args[1:], " "))
+		return fmt.Errorf("probe: 多了不需要的参数：%s", strings.Join(args[1:], " "))
 	}
 	rep, err := probe.Analyze(args[0])
 	if err != nil {
@@ -126,7 +126,7 @@ func runScan(args []string) error {
 	}
 	inputs := fs.Args()
 	if len(inputs) == 0 {
-		return fmt.Errorf("check: missing <directory|file...>")
+		return fmt.Errorf("check: 请给出要检查的文件或目录")
 	}
 
 	files, bad := classify.Collect(inputs)
@@ -400,13 +400,13 @@ func runFix(args []string) error {
 	}
 	raw := fs.Args()
 	if len(raw) == 0 {
-		return fmt.Errorf("fix: missing <file|dir...>")
+		return fmt.Errorf("fix: 请给出要处理的文件或目录")
 	}
 	if *inPlace && (*outdir != "" || *out != "") {
-		return fmt.Errorf("fix: -in-place is mutually exclusive with -outdir and -o")
+		return fmt.Errorf("fix: -in-place 与 -outdir（以及 -o）不能同时使用")
 	}
 	if !*inPlace && *backupDir != "" {
-		return fmt.Errorf("fix: -backup-dir requires -in-place")
+		return fmt.Errorf("fix: -backup-dir 需要配合 -in-place 使用")
 	}
 	fn, fragmented, err := normalizeFunc(*format, *window, *fragMs)
 	if err != nil {
@@ -433,10 +433,10 @@ func runFix(args []string) error {
 		return err
 	}
 	if len(inputs) == 0 {
-		return fmt.Errorf("fix: no input files")
+		return fmt.Errorf("fix: 没有找到可处理的文件")
 	}
 	if *out != "" {
-		return fmt.Errorf("fix: -o requires a single input file")
+		return fmt.Errorf("fix: -o 只能用于单个输入文件")
 	}
 	return runConcurrent(inputs, batchSettings{
 		cmd:       "fix",
@@ -470,10 +470,10 @@ type transformFunc func(normalize.ReadSeekerAt, io.Writer) (*normalize.Result, e
 // buildSpec validates the output-mode flags and resolves the new-file path.
 func buildSpec(cmd, in, out, suffix string, inPlace bool, backupDir string) (transformSpec, error) {
 	if inPlace && out != "" {
-		return transformSpec{}, fmt.Errorf("%s: -in-place and -o are mutually exclusive", cmd)
+		return transformSpec{}, fmt.Errorf("%s: -in-place 与 -o 不能同时使用", cmd)
 	}
 	if !inPlace && backupDir != "" {
-		return transformSpec{}, fmt.Errorf("%s: -backup-dir requires -in-place", cmd)
+		return transformSpec{}, fmt.Errorf("%s: -backup-dir 需要配合 -in-place 使用", cmd)
 	}
 	spec := transformSpec{inPlace: inPlace, backupDir: backupDir}
 	if !inPlace {
@@ -571,7 +571,7 @@ func normalizeFunc(format string, windowMs, fragMs int) (transformFunc, bool, er
 			return normalize.Fragment(src, dst, normalize.FragmentOptions{FragmentMs: fragMs})
 		}, true, nil
 	default:
-		return nil, false, fmt.Errorf("unknown format %q (want progressive or fmp4)", format)
+		return nil, false, fmt.Errorf("未知格式 %q（可选 progressive 或 fmp4）", format)
 	}
 }
 
@@ -642,7 +642,7 @@ func runReencode(args []string) error {
 // by container surgery alone and need a real re-encode, which is deliberately
 // not folded into `fix`.
 func reencodeAdvice(err error) error {
-	return fmt.Errorf("%w\n  if this file cannot be fixed without re-encoding (e.g. very sparse keyframes or VFR), try: mp4norm reencode <file>", err)
+	return fmt.Errorf("%w\n  如果这个文件无法靠无损方式修好（例如关键帧过于稀疏或 VFR），可以试试：mp4norm reencode <文件>", err)
 }
 
 // batchSettings carries the resolved options for a multi-file lossless rewrite.
@@ -660,10 +660,10 @@ type batchSettings struct {
 // so both share one implementation of the concurrent safe-write loop.
 func runConcurrent(inputs []string, s batchSettings, fn transformFunc, fragmented bool) error {
 	if s.inPlace && s.outdir != "" {
-		return fmt.Errorf("%s: -in-place and -outdir are mutually exclusive", s.cmd)
+		return fmt.Errorf("%s: -in-place 与 -outdir 不能同时使用", s.cmd)
 	}
 	if !s.inPlace && s.backupDir != "" {
-		return fmt.Errorf("%s: -backup-dir requires -in-place", s.cmd)
+		return fmt.Errorf("%s: -backup-dir 需要配合 -in-place 使用", s.cmd)
 	}
 	if s.outdir != "" {
 		if err := os.MkdirAll(s.outdir, 0o755); err != nil {
@@ -733,7 +733,7 @@ func runConcurrent(inputs []string, s batchSettings, fn transformFunc, fragmente
 			okCount, probe.HumanBytes(beforeFP), probe.HumanBytes(afterFP))
 	}
 	if failCount > 0 {
-		return fmt.Errorf("%s: %d file(s) failed", s.cmd, failCount)
+		return fmt.Errorf("%s: %d 个文件处理失败", s.cmd, failCount)
 	}
 	return nil
 }
@@ -747,7 +747,7 @@ func runBackups(args []string) error {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return fmt.Errorf("backups: want exactly one <directory>")
+		return fmt.Errorf("backups: 请给出一个备份目录（只能一个）")
 	}
 	dir := backup.ResolveDir(rest[0])
 	entries, err := backup.List(dir)
@@ -856,7 +856,7 @@ func runTmp(args []string) error {
 	}
 	dirs := fs.Args()
 	if len(dirs) == 0 {
-		return fmt.Errorf("tmp: missing <directory...>")
+		return fmt.Errorf("tmp: 请给出要检查的目录")
 	}
 	now := time.Now()
 	found := 0
@@ -976,10 +976,10 @@ func reorderArgs(fs *flag.FlagSet, args []string) []string {
 func requireOneArg(fs *flag.FlagSet, cmd string) (string, error) {
 	rest := fs.Args()
 	if len(rest) < 1 {
-		return "", fmt.Errorf("%s: missing <input>", cmd)
+		return "", fmt.Errorf("%s: 请给出输入文件", cmd)
 	}
 	if len(rest) > 1 {
-		return "", fmt.Errorf("%s: unexpected extra argument(s): %s", cmd, strings.Join(rest[1:], " "))
+		return "", fmt.Errorf("%s: 多了不需要的参数：%s", cmd, strings.Join(rest[1:], " "))
 	}
 	return rest[0], nil
 }
