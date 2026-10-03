@@ -587,6 +587,7 @@ function backupSection() {
 
 function render() {
   const scrollY = window.scrollY;
+  const hasFiles = state.files.length > 0;
   document.querySelector('#app').innerHTML = `
     ${headerHTML()}
     <section class="card" id="main-card">
@@ -595,8 +596,8 @@ function render() {
         <div class="row center">
           <button class="btn primary" data-act="choose-files">${t('btn.chooseFiles')}</button>
           <button class="btn" data-act="choose-folder">${t('btn.chooseFolder')}</button>
-          <button class="btn ghost" data-act="rescan">${t('btn.rescan')}</button>
-          <button class="btn ghost" data-act="clear">${t('btn.clear')}</button>
+          <button class="btn ghost" data-act="rescan"${hasFiles ? '' : ' disabled'}>${t('btn.rescan')}</button>
+          <button class="btn ghost" data-act="clear"${hasFiles ? '' : ' disabled'}>${t('btn.clear')}</button>
         </div>
       </div>
       ${globalStatusHTML()}
@@ -654,6 +655,16 @@ function refreshFixButton() {
   const count = selectedCount();
   btn.textContent = fixButtonLabel();
   btn.disabled = state.scanning || state.batch.running || count === 0;
+}
+
+// refreshListButtons mirrors the empty-list rule for the buttons that act on the
+// list itself: with no rows they have nothing to rescan or clear.
+function refreshListButtons() {
+  const hasFiles = state.files.length > 0;
+  for (const act of ['rescan', 'clear']) {
+    const btn = document.querySelector(`[data-act="${act}"]`);
+    if (btn) btn.disabled = !hasFiles;
+  }
 }
 
 // ---- Scanning -------------------------------------------------------------
@@ -1075,6 +1086,7 @@ EventsOn('scan:found', (p) => {
   if (!state.touched[p.path]) state.selection[p.path] = false;
   addRowDOM(row);
   refreshStatusDOM();
+  refreshListButtons();
 });
 
 EventsOn('scan:phase', (p) => {
