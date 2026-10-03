@@ -118,9 +118,9 @@ func runProbe(args []string) error {
 // needs work, 2 = something is broken or could not be read.
 func runScan(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
-	verbose := fs.Bool("v", false, "show the raw probe fields under each file")
-	needsWorkOnly := fs.Bool("needs-work", false, "only list files that need work")
-	asJSON := fs.Bool("json", false, "machine-readable JSON output")
+	verbose := fs.Bool("v", false, "在每个文件下面显示原始探测字段")
+	needsWorkOnly := fs.Bool("needs-work", false, "只列出需要处理的文件")
+	asJSON := fs.Bool("json", false, "机器可读的 JSON 输出")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
@@ -363,7 +363,7 @@ func padLeft(s string, w int) string {
 
 func runFaststart(args []string) error {
 	fs := flag.NewFlagSet("faststart", flag.ContinueOnError)
-	out := fs.String("o", "", "output file (default: <input>.norm.mp4)")
+	out := fs.String("o", "", "输出文件（默认：<输入>.norm.mp4）")
 	inPlace, backupDir := outputModeFlags(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
@@ -387,13 +387,13 @@ func runFaststart(args []string) error {
 // `normalize` and `batch` commands are hidden aliases of this one.
 func runFix(args []string) error {
 	fs := flag.NewFlagSet("fix", flag.ContinueOnError)
-	out := fs.String("o", "", "output file (single file only; default: <input>.norm.mp4)")
-	format := fs.String("format", "progressive", "output format: progressive or fmp4")
-	window := fs.Int("window", 1000, "interleave window in milliseconds (progressive)")
-	fragMs := fs.Int("frag-ms", 2000, "fragment duration in milliseconds (fmp4)")
-	jobs := fs.Int("jobs", runtime.NumCPU(), "parallel workers")
-	outdir := fs.String("outdir", "", "output directory (default: next to each input)")
-	suffix := fs.String("suffix", ".norm.mp4", "output filename suffix")
+	out := fs.String("o", "", "输出文件（仅限单个文件；默认：<输入>.norm.mp4）")
+	format := fs.String("format", "progressive", "输出格式：progressive 或 fmp4")
+	window := fs.Int("window", 1000, "交织窗口，单位毫秒（progressive）")
+	fragMs := fs.Int("frag-ms", 2000, "分片时长，单位毫秒（fmp4）")
+	jobs := fs.Int("jobs", runtime.NumCPU(), "并行任务数")
+	outdir := fs.String("outdir", "", "输出目录（默认：每个输入文件旁边）")
+	suffix := fs.String("suffix", ".norm.mp4", "输出文件名后缀")
 	inPlace, backupDir := outputModeFlags(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
@@ -452,8 +452,8 @@ func runFix(args []string) error {
 // commands. Both flags are opt-in, so their absence keeps the historical
 // "write a new file" behavior exactly.
 func outputModeFlags(fs *flag.FlagSet) (*bool, *string) {
-	inPlace := fs.Bool("in-place", false, "replace the input file after backing it up")
-	backupDir := fs.String("backup-dir", "", "directory for in-place backups (default: <input dir>/.mp4norm-backup)")
+	inPlace := fs.Bool("in-place", false, "备份后替换原文件")
+	backupDir := fs.String("backup-dir", "", "就地备份的存放目录（默认：<输入所在目录>/.mp4norm-backup）")
 	return inPlace, backupDir
 }
 
@@ -577,13 +577,13 @@ func normalizeFunc(format string, windowMs, fragMs int) (transformFunc, bool, er
 
 func runReencode(args []string) error {
 	fs := flag.NewFlagSet("reencode", flag.ContinueOnError)
-	out := fs.String("o", "", "output file (default: <input>.reenc.mp4)")
-	codec := fs.String("vcodec", "h264", "video codec: h264, h265 or copy")
-	hw := fs.String("hw", "auto", "hardware encoder: auto, on or off")
-	crf := fs.Int("crf", 23, "quality, lower is better")
-	preset := fs.String("preset", "medium", "encoder preset")
-	audioBR := fs.String("audio-bitrate", "", "re-encode audio at this bitrate (default: copy)")
-	gop := fs.Float64("gop", 2, "keyframe interval in seconds")
+	out := fs.String("o", "", "输出文件（默认：<输入>.reenc.mp4）")
+	codec := fs.String("vcodec", "h264", "视频编码：h264、h265 或 copy")
+	hw := fs.String("hw", "auto", "硬件编码器：auto、on 或 off")
+	crf := fs.Int("crf", 23, "画质，数值越低越好")
+	preset := fs.String("preset", "medium", "编码预设")
+	audioBR := fs.String("audio-bitrate", "", "以此码率重编码音频（默认：copy）")
+	gop := fs.Float64("gop", 2, "关键帧间隔，单位秒")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
@@ -781,7 +781,7 @@ func runBackups(args []string) error {
 // exists, its current version is backed up first so the restore is undoable.
 func runRestore(args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	dirFlag := fs.String("backup-dir", "", "backup directory (default: alongside the file)")
+	dirFlag := fs.String("backup-dir", "", "备份目录（默认：文件旁边）")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
@@ -810,8 +810,8 @@ func runRestore(args []string) error {
 // runForget deletes every backup of a file. Without --yes it only lists them.
 func runForget(args []string) error {
 	fs := flag.NewFlagSet("forget", flag.ContinueOnError)
-	dirFlag := fs.String("backup-dir", "", "backup directory (default: alongside the file)")
-	yes := fs.Bool("yes", false, "confirm deletion")
+	dirFlag := fs.String("backup-dir", "", "备份目录（默认：文件旁边）")
+	yes := fs.Bool("yes", false, "确认删除")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}

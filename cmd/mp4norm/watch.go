@@ -32,12 +32,12 @@ const watchSuffix = ".norm.mp4"
 // 2 an error); run it twice to observe then process.
 func runWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
-	interval := fs.Duration("interval", 5*time.Minute, "poll interval (minimum 30s)")
-	outdir := fs.String("outdir", "", "output directory (default: <input>.norm.mp4 beside each file)")
-	inPlace := fs.Bool("in-place", false, "replace the input file after backing it up")
-	backupDir := fs.String("backup-dir", "", "directory for in-place backups (default: <input dir>/.mp4norm-backup)")
-	once := fs.Bool("once", false, "run a single observation round and exit (run twice to observe, then process)")
-	quiet := fs.Bool("quiet", false, "only report files processed or errors")
+	interval := fs.Duration("interval", 5*time.Minute, "轮询间隔（最小 30s）")
+	outdir := fs.String("outdir", "", "输出目录（默认：<输入>.norm.mp4 放在每个文件旁边）")
+	inPlace := fs.Bool("in-place", false, "备份后替换原文件")
+	backupDir := fs.String("backup-dir", "", "就地备份的存放目录（默认：<输入所在目录>/.mp4norm-backup）")
+	once := fs.Bool("once", false, "只跑一轮观察后退出（先观察、再处理需运行两次）")
+	quiet := fs.Bool("quiet", false, "只报告已处理或出错的文件")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return err
 	}
