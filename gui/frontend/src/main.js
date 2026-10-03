@@ -225,7 +225,7 @@ function rowStatus(v) {
       case 'failed':
         return { text: `${t('file.failed')} · ${failureReason(st.error)}`, tone: 'red' };
       case 'skipped':
-        return { text: t('file.ok'), tone: 'green' };
+        return { text: t('file.skipped'), tone: 'grey' };
     }
   }
   if (v.phase === 'checking') return { text: t('file.checking'), tone: 'blue' };
